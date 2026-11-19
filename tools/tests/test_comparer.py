@@ -135,3 +135,48 @@ def test_cle_normalise_unicode_nfc_avant_la_casse():
     assert _cle("Dossier.zip", nfd) == _cle("DOSSIER.zip", nfc)
     # variante : majuscule accentuée, repliée après composition
     assert _cle("a.zip", unicodedata.normalize("NFD", "É.dwg")) == _cle("a.zip", "é.dwg")
+
+
+def test_attribuer_identifiants_garde_l_existant_et_complete_apres_le_plus_grand():
+    from comparer import _cle, attribuer_identifiants
+    refs = {}
+    for z, c in [("A.zip", "x.dwg"), ("A.zip", "nouveau.dwg"), ("B.zip", "b.dwg"), ("C.zip", "c.dwg")]:
+        refs[_cle(z, c)] = {"fichier": z, "chemin": c}
+    existants = {
+        "zips": {"a.zip": "P01", "c.zip": "P07"},
+        "dwg": {_cle("A.zip", "x.dwg"): "P01-3", _cle("C.zip", "c.dwg"): "P07-1"},
+        "lignes": {"P01": "A.zip", "P01-3": "A.zip / x.dwg", "P07": "C.zip", "P07-1": "C.zip / c.dwg",
+                   "P05-1": "Disparu.zip / d.dwg"},
+    }
+    zips, id_zip, id_dwg, corr = attribuer_identifiants(refs, existants)
+    assert id_zip == {"A.zip": "P01", "B.zip": "P08", "C.zip": "P07"}   # B après le plus grand (P07)
+    assert id_dwg[_cle("A.zip", "x.dwg")] == "P01-3"                     # existant conservé
+    assert id_dwg[_cle("A.zip", "nouveau.dwg")] == "P01-4"               # après le plus grand du ZIP
+    assert id_dwg[_cle("B.zip", "b.dwg")] == "P08-1"
+    assert id_dwg[_cle("C.zip", "c.dwg")] == "P07-1"
+    assert ("P05-1", "Disparu.zip / d.dwg") in corr                      # identifiant réservé, jamais réattribué
+
+
+def test_comparer_et_emprises_donnent_le_meme_identifiant_au_meme_zip(tmp_path):
+    from emprises import emprises
+    contour = tmp_path / "c.geojson"
+    contour.write_text('{"type":"Polygon","coordinates":[[[7,43],[8,43],[8,44],[7,44],[7,43]]]}', encoding="utf-8")
+    # 1) le comparateur ne connaît que Zeta.zip : P01
+    ecrire(tmp_path / "reference.csv", [["Zeta.zip", "z.dwg", "reference", "AC1032", "", "LINE", 1, ""]])
+    ecrire(tmp_path / "a.csv", [["Zeta.zip", "z.dwg", "lecteurA", "x", 1, "LINE", 1, ""]])
+    comparer(tmp_path, tmp_path / "lecteurs.md")
+    # 2) emprises.csv contient aussi Alpha.zip (DWG non converti par ODA), qui sort avant Zeta par ordre alphabétique
+    (tmp_path / "emprises.csv").write_text(
+        "fichier,chemin,insunits,xmin,ymin,xmax,ymax,geodata\n"
+        "Zeta.zip,z.dwg,6,,,,,false\nAlpha.zip,a.dwg,6,,,,,false\n", encoding="utf-8")
+    emprises(tmp_path / "emprises.csv", contour, tmp_path / "emprises.md")
+    md = (tmp_path / "emprises.md").read_text(encoding="utf-8")
+    assert "| P01-1 | inconnue |" in md and "| P02-1 | inconnue |" in md
+    corr = {c["nom"]: c["identifiant"] for c in csv.DictReader((tmp_path / "correspondance.csv").open(encoding="utf-8", newline=""))}
+    assert corr["Zeta.zip"] == "P01"          # Zeta garde P01 : identifiant du comparateur conservé
+    assert corr["Alpha.zip"] == "P02"
+    # 3) le comparateur relancé donne les mêmes identifiants (le fichier est complété, pas écrasé)
+    comparer(tmp_path, tmp_path / "lecteurs2.md")
+    corr2 = {c["nom"]: c["identifiant"] for c in csv.DictReader((tmp_path / "correspondance.csv").open(encoding="utf-8", newline=""))}
+    assert corr2["Zeta.zip"] == "P01" and corr2["Alpha.zip"] == "P02"
+    assert "P01-1" in (tmp_path / "lecteurs2.md").read_text(encoding="utf-8")

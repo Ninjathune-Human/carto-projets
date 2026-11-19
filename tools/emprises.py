@@ -8,7 +8,7 @@ from pyproj import Transformer
 from shapely.geometry import box, shape
 from shapely.ops import transform, unary_union
 
-from comparer import _cle, attribuer_identifiants
+from comparer import _cle, identifiants_du_dossier
 
 FACTEURS = (1, 0.01, 0.001)
 CLASSES = ("dedans", "a_cheval", "dehors", "inconnue")
@@ -53,29 +53,14 @@ def _emprise(l):
     return None if None in v else tuple(v)
 
 
-def _ids_correspondance(dossier: Path):
-    f = dossier / "correspondance.csv"
-    if not f.exists():
-        return None
-    ids = {}
-    with open(f, encoding="utf-8", newline="") as h:
-        for r in csv.DictReader(h):
-            if " / " in r["nom"]:
-                z, c = r["nom"].split(" / ", 1)
-                ids[_cle(z, c)] = r["identifiant"]
-    return ids
-
-
 def emprises(csv_emprises: Path, geojson: Path, sortie_md: Path) -> None:
     csv_emprises = Path(csv_emprises)
     contour = charger_contour(geojson)
     with open(csv_emprises, encoding="utf-8", newline="") as h:
         lignes = [l for l in csv.DictReader(h) if l.get("chemin")]
-    ids = _ids_correspondance(csv_emprises.parent)
-    if ids is None or any(_cle(l["fichier"], l["chemin"]) not in ids for l in lignes):
-        refs = {_cle(l["fichier"], l["chemin"]): {"fichier": l["fichier"], "chemin": l["chemin"]}
-                for l in lignes}
-        ids = attribuer_identifiants(refs)[2]
+    refs = {_cle(l["fichier"], l["chemin"]): {"fichier": l["fichier"], "chemin": l["chemin"]}
+            for l in lignes}
+    ids = identifiants_du_dossier(csv_emprises.parent, refs)[2]  # complète correspondance.csv
     lignes.sort(key=lambda l: (int(ids[_cle(l["fichier"], l["chemin"])][1:].split("-")[0]),
                                int(ids[_cle(l["fichier"], l["chemin"])].split("-")[1])))
     res = [(ids[_cle(l["fichier"], l["chemin"])], *classer(_emprise(l), contour),

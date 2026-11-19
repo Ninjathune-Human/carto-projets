@@ -1,5 +1,6 @@
 """Compare les lecteurs DWG à la référence ODA/ezdxf sur le schéma CSV commun."""
 import csv
+import re
 import statistics
 import sys
 import unicodedata
@@ -84,22 +85,87 @@ def _pct(x) -> str:
     return "—" if x is None else f"{x * 100:.1f}".replace(".", ",") + " %"
 
 
-def attribuer_identifiants(refs: dict[tuple, dict]):
-    """Identifiants anonymes : P01… par ZIP trié, P01-1… par DWG trié dans le ZIP.
+def _cle_zip(fichier: str) -> str:
+    return unicodedata.normalize("NFC", fichier).lower()
+
+
+def _numeros(identifiant: str) -> tuple[int, int]:
+    """'P03-2' -> (3, 2) ; 'P03' -> (3, 0)."""
+    zip_, _, dwg = identifiant[1:].partition("-")
+    return int(zip_), int(dwg or 0)
+
+
+def lire_correspondance(dossier: Path) -> dict:
+    """Identifiants déjà attribués (correspondance.csv du dossier) ; vide si le fichier manque."""
+    existants = {"zips": {}, "dwg": {}, "lignes": {}}
+    f = Path(dossier) / "correspondance.csv"
+    if not f.exists():
+        return existants
+    with open(f, encoding="utf-8", newline="") as h:
+        for r in csv.DictReader(h):
+            ident, nom = (r.get("identifiant") or "").strip(), r.get("nom") or ""
+            if not ident or not re.fullmatch(r"P\d+(-\d+)?", ident):
+                continue
+            existants["lignes"][ident] = nom
+            if "-" in ident:
+                if " / " in nom:
+                    z, c = nom.split(" / ", 1)
+                    existants["dwg"][_cle(z, c)] = ident
+            else:
+                existants["zips"][_cle_zip(nom)] = ident
+    return existants
+
+
+def attribuer_identifiants(refs: dict[tuple, dict], existants: dict | None = None):
+    """Identifiants anonymes : P01… par ZIP, P01-1… par DWG.
 
     refs : cle (voir _cle) -> {"fichier", "chemin", ...}.
-    Retourne (zips, id_zip, id_dwg, correspondance).
+    existants : résultat de lire_correspondance. Les identifiants connus sont conservés ; les ZIP et
+    DWG nouveaux reçoivent, par ordre alphabétique, les numéros qui suivent le plus grand déjà
+    attribué (jamais de renumérotation, jamais de réutilisation).
+    Retourne (zips, id_zip, id_dwg, correspondance) ; correspondance contient aussi les
+    identifiants existants qui ne sont plus dans refs.
     """
+    ex = existants or {"zips": {}, "dwg": {}, "lignes": {}}
     zips = sorted({e["fichier"] for e in refs.values()})
-    id_zip = {z: f"P{i:02d}" for i, z in enumerate(zips, 1)}
-    id_dwg, correspondance = {}, []
+    plus_grand = max([_numeros(i)[0] for i in ex["lignes"]] or [0])
+    id_zip = {}
     for z in zips:
-        correspondance.append((id_zip[z], z))
+        connu = ex["zips"].get(_cle_zip(z))
+        if connu is None:
+            plus_grand += 1
+            connu = f"P{plus_grand:02d}"
+        id_zip[z] = connu
+    lignes = dict(ex["lignes"])
+    id_dwg = {}
+    for z in zips:
         cles = sorted((k for k, e in refs.items() if e["fichier"] == z), key=lambda k: k[1])
-        for i, k in enumerate(cles, 1):
-            id_dwg[k] = f"{id_zip[z]}-{i}"
-            correspondance.append((id_dwg[k], f"{z} / {refs[k]['chemin']}"))
+        suivant = max([_numeros(i)[1] for i in ex["lignes"] if i.startswith(id_zip[z] + "-")] or [0])
+        for k in cles:
+            connu = ex["dwg"].get(k)
+            if connu is None or not connu.startswith(id_zip[z] + "-"):
+                suivant += 1
+                connu = f"{id_zip[z]}-{suivant}"
+            id_dwg[k] = connu
+            lignes[connu] = f"{z} / {refs[k]['chemin']}"
+        lignes[id_zip[z]] = z
+    correspondance = sorted(lignes.items(), key=lambda kv: _numeros(kv[0]))
     return zips, id_zip, id_dwg, correspondance
+
+
+def ecrire_correspondance(dossier: Path, correspondance) -> None:
+    with open(Path(dossier) / "correspondance.csv", "w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f, lineterminator="\n")
+        w.writerow(["identifiant", "nom"])
+        w.writerows(correspondance)
+
+
+def identifiants_du_dossier(dossier: Path, refs: dict[tuple, dict]):
+    """Attribue (en complétant correspondance.csv) puis réécrit le fichier : même résultat pour
+    comparer.py et emprises.py. Retourne (zips, id_zip, id_dwg, correspondance)."""
+    resultat = attribuer_identifiants(refs, lire_correspondance(dossier))
+    ecrire_correspondance(dossier, resultat[3])
+    return resultat
 
 
 def comparer(dossier_resultats: Path, sortie_md: Path) -> None:
@@ -121,8 +187,8 @@ def comparer(dossier_resultats: Path, sortie_md: Path) -> None:
             t = normaliser_type(l["type"])
             e["comptes"][t] = e["comptes"].get(t, 0) + _entier(l["nombre"])
 
-    zips, id_zip, id_dwg, correspondance = attribuer_identifiants(refs)
-    ordre = sorted(refs, key=lambda k: (id_zip[refs[k]["fichier"]], int(id_dwg[k].split("-")[1])))
+    zips, id_zip, id_dwg, correspondance = identifiants_du_dossier(dossier, refs)
+    ordre = sorted(refs, key=lambda k: _numeros(id_dwg[k]))
 
     noms = sorted(lecteurs)
     par_lecteur = {n: {} for n in noms}   # nom -> cle -> taux ou None
@@ -171,10 +237,6 @@ def comparer(dossier_resultats: Path, sortie_md: Path) -> None:
     sortie_md = Path(sortie_md)
     sortie_md.parent.mkdir(parents=True, exist_ok=True)
     sortie_md.write_text("\n".join(md), encoding="utf-8")
-    with open(dossier / "correspondance.csv", "w", encoding="utf-8", newline="") as f:
-        w = csv.writer(f, lineterminator="\n")
-        w.writerow(["identifiant", "nom"])
-        w.writerows(correspondance)
 
 
 if __name__ == "__main__":
