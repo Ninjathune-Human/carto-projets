@@ -17,8 +17,14 @@ function mesurerDansWorker(nom, octets) {
   return new Promise((resolve, reject) => {
     if (!worker) nouveauWorker();
     worker.onmessage = (e) => {
-      if (e.data.erreur) reject(new Error(e.data.erreur));
-      else resolve(e.data);
+      if (e.data.erreur) {
+        nouveauWorker();
+        reject(new Error(e.data.erreur));
+      } else resolve(e.data);
+    };
+    worker.onmessageerror = () => {
+      nouveauWorker();
+      reject(new Error("réponse illisible du lecteur"));
     };
     worker.onerror = (e) => {
       nouveauWorker();
