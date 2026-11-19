@@ -18,3 +18,4 @@ csv = "1"
 [dev-dependencies]
 tempfile = "3"
 zip = { version = "9.7.3", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+acadrust = { version = "0.6.8", default-features = false }

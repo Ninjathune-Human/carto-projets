@@ -53,3 +53,20 @@ fn ecrit_les_csv_et_ne_s_arrete_pas_sur_un_dwg_casse() {
     assert_eq!(&e[0][1], "Plans/bon.dwg");
     assert_eq!(&e[0][7], "false");
 }
+
+#[test]
+fn dwg_vide_donne_une_ligne_sans_type() {
+    let vide = acadrust::DwgWriter::write_to_vec(&acadrust::CadDocument::new()).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let zips = tmp.path().join("zips");
+    std::fs::create_dir(&zips).unwrap();
+    std::fs::write(zips.join("v.zip"), zip_de_test(&[("vide.dwg", &vide)])).unwrap();
+    let sortie = tmp.path().join("sortie");
+    mesurer_dossier(&zips, &sortie).unwrap();
+    let mut lecteur = csv::Reader::from_path(sortie.join("acadrust.csv")).unwrap();
+    let lignes: Vec<csv::StringRecord> = lecteur.records().map(|r| r.unwrap()).collect();
+    let v: Vec<_> = lignes.iter().filter(|r| &r[1] == "vide.dwg").collect();
+    assert_eq!(v.len(), 1);
+    assert_eq!((&v[0][5], &v[0][6], &v[0][7]), ("", "0", ""));
+    assert!(!v[0][3].is_empty());
+}

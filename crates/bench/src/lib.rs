@@ -50,11 +50,22 @@ pub fn mesurer_dossier(zips: &Path, sortie: &Path) -> io::Result<()> {
             }
         };
         for dwg in &inv.dwg {
-            let debut = Instant::now();
-            let resultat = lire_entree(&octets, dwg).and_then(|o| mesurer(&o));
-            let duree = debut.elapsed().as_millis().to_string();
+            // Seule la mesure (lecture + comptage du DWG) est chronométrée, pas l'extraction du ZIP.
+            let (resultat, duree) = match lire_entree(&octets, dwg) {
+                Ok(o) => {
+                    let debut = Instant::now();
+                    let r = mesurer(&o);
+                    (r, debut.elapsed().as_millis().to_string())
+                }
+                Err(e) => (Err(e), "0".to_string()),
+            };
             match resultat {
                 Ok(m) => {
+                    if m.par_type.is_empty() {
+                        mesures
+                            .write_record([&fichier, dwg, "acadrust", &m.version, &duree, "", "0", ""])
+                            .map_err(io_err)?;
+                    }
                     for (type_, nombre) in &m.par_type {
                         mesures
                             .write_record([
