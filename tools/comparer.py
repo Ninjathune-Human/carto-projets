@@ -31,7 +31,10 @@ def _lire_csv(dossier: Path):
         if f.name == "correspondance.csv":
             continue
         with open(f, encoding="utf-8", newline="") as h:
-            lignes.extend(csv.DictReader(h))
+            lecteur = csv.DictReader(h)
+            if "lecteur" not in (lecteur.fieldnames or []):
+                continue  # autre CSV du dossier (ex. emprises.csv)
+            lignes.extend(lecteur)
     return lignes
 
 

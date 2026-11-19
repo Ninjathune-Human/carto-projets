@@ -79,7 +79,7 @@ def emprises(csv_emprises: Path, geojson: Path, sortie_md: Path) -> None:
     lignes.sort(key=lambda l: (int(ids[_cle(l["fichier"], l["chemin"])][1:].split("-")[0]),
                                int(ids[_cle(l["fichier"], l["chemin"])].split("-")[1])))
     res = [(ids[_cle(l["fichier"], l["chemin"])], *classer(_emprise(l), contour),
-            l.get("insunits") or "—", "oui" if l.get("geodata") == "true" else "non")
+            l.get("insunits") or "—", "oui" if (l.get("geodata") or "").strip().lower() == "true" else "non")
            for l in lignes]
 
     md = ["# Emprises des DWG par rapport au contour de la Métropole", "",

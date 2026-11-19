@@ -48,3 +48,19 @@ def test_comparer_bout_en_bout(tmp_path):
     corr = list(csv.DictReader((tmp_path / "correspondance.csv").open(encoding="utf-8", newline="")))
     assert {c["identifiant"] for c in corr} >= {"P01", "P01-1", "P01-2"}
     assert any(c["nom"] == "Secret.zip" for c in corr)
+
+
+def test_comparer_ignore_csv_sans_colonne_lecteur(tmp_path):
+    def preparer(dossier):
+        dossier.mkdir()
+        ecrire(dossier / "reference.csv", [["S.zip", "p.dwg", "reference", "AC1032", "", "LINE", 10, ""]])
+        ecrire(dossier / "a.csv", [["S.zip", "p.dwg", "lecteurA", "x", 10, "LINE", 8, ""]])
+    preparer(tmp_path / "sans")
+    preparer(tmp_path / "avec")
+    (tmp_path / "avec" / "emprises.csv").write_text(
+        "fichier,chemin,insunits,xmin,ymin,xmax,ymax,geodata\nS.zip,p.dwg,6,1,2,3,4,false\n",
+        encoding="utf-8")
+    comparer(tmp_path / "sans", tmp_path / "sans.md")
+    comparer(tmp_path / "avec", tmp_path / "avec.md")
+    assert (tmp_path / "avec.md").read_text(encoding="utf-8") == (tmp_path / "sans.md").read_text(encoding="utf-8")
+    assert "80,0 %" in (tmp_path / "avec.md").read_text(encoding="utf-8")
