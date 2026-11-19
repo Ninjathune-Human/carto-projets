@@ -35,10 +35,18 @@ jobs:
         run: wasm-pack test --node crates/wasm
       - name: Construire le module wasm
         run: wasm-pack build crates/wasm --target web --release --out-dir ../../essais/banc/pkg
+      - name: Assembler le site (_site)
+        run: |
+          mkdir -p _site/essais
+          cp index.html banniere.svg catalogue.json _site/
+          if [ -d data ]; then cp -r data _site/data; fi
+          cp -r essais/banc essais/carte essais/sources _site/essais/
+          rm -rf _site/essais/carte/test _site/essais/sources/test
+          du -sh _site
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: _site
       - name: Publier sur Pages
         id: deployment
         uses: actions/deploy-pages@v4
