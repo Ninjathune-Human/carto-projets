@@ -39,8 +39,8 @@ def test_ecrire_reference_schema_commun(tmp_path):
     (ref / "Lot A" / "casse.dxf").write_text("pas un dxf")
     sortie = tmp_path / "out" / "reference.csv"
     ecrire_reference(ref, sortie)
-    lignes = list(csv.DictReader(open(sortie, encoding="utf-8", newline="")))
-    assert open(sortie, encoding="utf-8").readline().strip() == "fichier,chemin,lecteur,version,duree_ms,type,nombre,erreur"
+    lignes = list(csv.DictReader(sortie.open(encoding="utf-8", newline="")))
+    assert sortie.read_text(encoding="utf-8").splitlines()[0] == "fichier,chemin,lecteur,version,duree_ms,type,nombre,erreur"
     ok = [l for l in lignes if l["chemin"] == "sous/plan.dwg"]
     assert ok == [{"fichier": "Lot A.zip", "chemin": "sous/plan.dwg", "lecteur": "reference",
                    "version": "AC1032", "duree_ms": "", "type": "LINE", "nombre": "1", "erreur": ""}]

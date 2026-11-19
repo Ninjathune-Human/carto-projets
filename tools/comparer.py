@@ -22,7 +22,7 @@ def _cle(fichier: str, chemin: str) -> tuple[str, str]:
     c = chemin.replace("\\", "/")
     if c.lower().endswith(".dwg"):
         c = c[:-4]
-    return fichier, c.lower()
+    return fichier.lower(), c.lower()
 
 
 def _lire_csv(dossier: Path):
@@ -40,6 +40,13 @@ def _entier(v):
         return int(v)
     except (TypeError, ValueError):
         return 0
+
+
+def _flottant(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
 
 
 def _pct(x) -> str:
@@ -60,7 +67,7 @@ def comparer(dossier_resultats: Path, sortie_md: Path) -> None:
         if l.get("erreur"):
             e["erreur"] = True
         elif l.get("duree_ms") not in (None, ""):
-            e["duree"] = float(l["duree_ms"])
+            e["duree"] = _flottant(l["duree_ms"])
         if l.get("type"):
             e["comptes"][l["type"]] = e["comptes"].get(l["type"], 0) + _entier(l["nombre"])
 

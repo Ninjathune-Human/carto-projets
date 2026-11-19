@@ -1,7 +1,5 @@
 import csv
 
-import pytest
-
 from comparer import comparer
 
 ENTETE = ["fichier", "chemin", "lecteur", "version", "duree_ms", "type", "nombre", "erreur"]
@@ -23,7 +21,7 @@ def test_comparer_bout_en_bout(tmp_path):
     ecrire(tmp_path / "a.csv", [
         ["Secret.zip", "plan1.DWG", "lecteurA", "x", 10, "LINE", 10, ""],
         ["Secret.zip", "plan1.DWG", "lecteurA", "x", 10, "CIRCLE", 4, ""],
-        ["Secret.zip", "Sous/Plan2.dwg", "lecteurA", "x", 30, "LINE", 10, ""],
+        ["secret.ZIP", "Sous/Plan2.dwg", "lecteurA", "x", 30, "LINE", 10, ""],
     ])
     ecrire(tmp_path / "b.csv", [
         ["Secret.zip", "plan1.dwg", "lecteurB", "x", 5, "LINE", 5, ""],
@@ -33,11 +31,20 @@ def test_comparer_bout_en_bout(tmp_path):
     texte = md.read_text(encoding="utf-8")
     assert "Secret" not in texte and "plan1" not in texte.lower() and "Plan2" not in texte
     assert "P01-1" in texte and "P01-2" in texte
-    lignes = {l.split("|")[1].strip(): [c.strip() for c in l.split("|")[2:-1]] for l in texte.splitlines()
-              if l.startswith("|")}
-    # global A = (14+10)/25 ; B = 5/25
-    assert "96,0" in " ".join(lignes["lecteurA"])
-    assert "20,0" in " ".join(lignes["lecteurB"])
-    corr = list(csv.DictReader(open(tmp_path / "correspondance.csv", encoding="utf-8", newline="")))
+    def cellules(nom, section):
+        lignes = texte.split("## Détail")[1 if section == "detail" else 0].splitlines()
+        for l in lignes:
+            c = [x.strip() for x in l.split("|")[1:-1]]
+            if c and c[0] == nom:
+                return c
+        raise AssertionError(nom)
+
+    # synthèse : lecteur | global | minimum | erreurs/absents | médiane
+    assert cellules("lecteurA", "synthese")[1:] == ["96,0 %", "93,3 %", "0", "20"]
+    assert cellules("lecteurB", "synthese")[1:] == ["20,0 %", "0,0 %", "1", "5"]
+    # détail : colonnes lecteurA, lecteurB
+    assert cellules("P01-1", "detail")[1:] == ["93,3 %", "33,3 %"]
+    assert cellules("P01-2", "detail")[1:] == ["100,0 %", "0,0 %"]
+    corr = list(csv.DictReader((tmp_path / "correspondance.csv").open(encoding="utf-8", newline="")))
     assert {c["identifiant"] for c in corr} >= {"P01", "P01-1", "P01-2"}
     assert any(c["nom"] == "Secret.zip" for c in corr)
