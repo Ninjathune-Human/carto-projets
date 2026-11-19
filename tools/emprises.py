@@ -27,9 +27,21 @@ def classer(emprise, contour):
     return "dehors", None
 
 
+def _crs_wgs84(crs) -> bool:
+    nom = json.dumps(crs).upper().replace(" ", "")
+    return any(m in nom for m in ("4326", "CRS84", "WGS84"))
+
+
 def charger_contour(chemin: Path):
-    """Union de tous les polygones du GeoJSON (WGS84), reprojetée en EPSG:2154."""
+    """Union de tous les polygones du GeoJSON (WGS84), reprojetée en EPSG:2154.
+
+    Lève ValueError si le fichier déclare un autre système (membre `crs`) ou si ses coordonnées
+    sortent de [-180, 180] x [-90, 90] (ex. Lambert 93 : tout classerait « dehors »).
+    """
     data = json.loads(Path(chemin).read_text(encoding="utf-8"))
+    if "crs" in data and not _crs_wgs84(data["crs"]):
+        raise ValueError("le contour déclare un système de coordonnées autre que WGS84 (membre crs) ; "
+                         "fournir un GeoJSON en WGS84 (EPSG:4326)")
     if data.get("type") == "FeatureCollection":
         geoms = [shape(f["geometry"]) for f in data["features"] if f.get("geometry")]
     elif data.get("type") == "Feature":
@@ -37,6 +49,10 @@ def charger_contour(chemin: Path):
     else:
         geoms = [shape(data)]
     union = unary_union(geoms)
+    xmin, ymin, xmax, ymax = union.bounds
+    if not (-180 <= xmin <= xmax <= 180 and -90 <= ymin <= ymax <= 90):
+        raise ValueError("les coordonnées du contour ne sont pas en WGS84 (longitude/latitude en degrés) : "
+                         f"emprise lue ({xmin}, {ymin}, {xmax}, {ymax}) ; fournir un GeoJSON en EPSG:4326")
     t = Transformer.from_crs(4326, 2154, always_xy=True)
     return transform(t.transform, union)
 
@@ -89,5 +105,9 @@ if __name__ == "__main__":
     if not Path(sys.argv[2]).is_file():
         print(f"erreur : contour introuvable : {sys.argv[2]}", file=sys.stderr)
         sys.exit(1)
-    emprises(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]))
+    try:
+        emprises(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]))
+    except ValueError as e:
+        print(f"erreur : {e}", file=sys.stderr)
+        sys.exit(1)
     print(sys.argv[3])

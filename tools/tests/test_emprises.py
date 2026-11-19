@@ -74,3 +74,35 @@ def test_cli_contour_absent(tmp_path):
                        capture_output=True, text=True)
     assert r.returncode == 1
     assert "absent.geojson" in r.stderr
+
+
+def _cli(tmp_path, geojson):
+    contour = tmp_path / "contour.geojson"
+    contour.write_text(geojson, encoding="utf-8")
+    emp = tmp_path / "emprises.csv"
+    emp.write_text("fichier,chemin,insunits,xmin,ymin,xmax,ymax,geodata\nA.zip,a.dwg,6,1,2,3,4,false\n", encoding="utf-8")
+    return subprocess.run([sys.executable, str(Path(__file__).parents[1] / "emprises.py"),
+                           str(emp), str(contour), str(tmp_path / "o.md")], capture_output=True, text=True)
+
+
+def test_cli_contour_en_lambert_93_refuse(tmp_path):
+    r = _cli(tmp_path, '{"type":"Polygon","coordinates":[[[1000000,6300000],[1010000,6300000],'
+                       '[1010000,6310000],[1000000,6310000],[1000000,6300000]]]}')
+    assert r.returncode == 1
+    assert "WGS84" in r.stderr
+    assert not (tmp_path / "o.md").exists()
+
+
+def test_cli_contour_avec_crs_non_wgs84_refuse(tmp_path):
+    r = _cli(tmp_path, '{"type":"FeatureCollection","crs":{"type":"name","properties":{"name":"urn:ogc:def:crs:EPSG::2154"}},'
+                       '"features":[{"type":"Feature","properties":{},"geometry":{"type":"Polygon","coordinates":'
+                       '[[[7.2,43.6],[7.3,43.6],[7.3,43.7],[7.2,43.7],[7.2,43.6]]]}}]}')
+    assert r.returncode == 1
+    assert "WGS84" in r.stderr
+
+
+def test_cli_contour_avec_crs_wgs84_accepte(tmp_path):
+    r = _cli(tmp_path, '{"type":"FeatureCollection","crs":{"type":"name","properties":{"name":"urn:ogc:def:crs:OGC:1.3:CRS84"}},'
+                       '"features":[{"type":"Feature","properties":{},"geometry":{"type":"Polygon","coordinates":'
+                       '[[[7.2,43.6],[7.3,43.6],[7.3,43.7],[7.2,43.7],[7.2,43.6]]]}}]}')
+    assert r.returncode == 0, r.stderr
