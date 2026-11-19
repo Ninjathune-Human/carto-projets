@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Essai carte et couche WebGL</title>
+<style>
+  :root {
+    --fond:#f7f6f2; --encre:#1c1c1a; --gris:#6f6d66; --filet:#d9d6cc; --alerte:#9b2c2c;
+    --marge: .75rem;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--fond); color: var(--encre); overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.45; -webkit-font-smoothing: antialiased;
+  }
+  #carte { position: fixed; inset: 0; background: var(--fond); }
+
+  #panneau {
+    position: fixed; z-index: 10;
+    top: calc(env(safe-area-inset-top, 0px) + var(--marge));
+    left: calc(env(safe-area-inset-left, 0px) + var(--marge));
+    width: min(21rem, calc(100vw - 2 * var(--marge) - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)));
+    max-height: calc(100dvh - 2 * var(--marge) - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+    overflow-y: auto; overscroll-behavior: contain;
+    background: var(--fond); border: 1px solid var(--filet);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, .12);
+    font-size: .9rem; touch-action: manipulation;
+  }
+  .tete { display: flex; align-items: center; gap: .5rem; padding: 0 .75rem 0 0; border-bottom: 1px solid var(--filet); }
+  #encoche {
+    flex: none; width: 44px; height: 44px; padding: 0; border: 0; border-right: 1px solid var(--filet);
+    background: transparent; color: var(--encre); cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .chevron {
+    width: .55rem; height: .55rem; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
+    transform: translateY(-2px) rotate(45deg); transition: transform .2s ease;
+  }
+  #encoche[aria-expanded="false"] .chevron { transform: translateX(-2px) rotate(-45deg); }
+  h1 { flex: 1; margin: 0; font-size: .95rem; font-weight: 500; letter-spacing: -0.01em; }
+  .tete a { color: var(--gris); text-decoration: none; padding: .6rem 0; }
+  .tete a:hover, .tete a:focus-visible { color: var(--encre); }
+
+  .compteurs {
+    display: grid; grid-template-columns: auto 1fr auto 1fr; gap: .15rem .6rem;
+    margin: 0; padding: .5rem .75rem; font-variant-numeric: tabular-nums; border-bottom: 1px solid var(--filet);
+  }
+  .compteurs dt { color: var(--gris); }
+  .compteurs dd { margin: 0; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #messages { margin: 0; padding: 0; list-style: none; }
+  #messages li { padding: .45rem .75rem; border-top: 1px solid var(--filet); color: var(--gris); }
+  #messages li.alerte { color: var(--alerte); }
+  #corps[hidden] + #messages li:first-child { border-top: 0; }
+
+  #corps[hidden] { display: none; }
+  fieldset { margin: 0; padding: .6rem .75rem .75rem; border: 0; border-bottom: 1px solid var(--filet); }
+  #corps > fieldset:last-child { border-bottom: 0; }
+  legend { padding: 0; margin-bottom: .4rem; color: var(--gris); font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; float: left; width: 100%; }
+  .ligne { display: flex; gap: .5rem; align-items: center; clear: both; }
+  .ligne + .ligne, .ligne + .bascule, .bascule + .ligne { margin-top: .5rem; }
+  .ligne > input[type=password], .ligne > input[type=number] { flex: 1; min-width: 0; }
+  .ligne > .etiquette { color: var(--gris); }
+
+  input[type=password], input[type=number] {
+    min-height: 44px; padding: 0 .6rem; font: inherit; font-size: 16px; /* 16 px : pas de zoom automatique sur iPhone */
+    color: var(--encre); background: transparent; border: 1px solid var(--filet); border-radius: 0;
+  }
+  input[type=password]:focus-visible, input[type=number]:focus-visible { outline: 2px solid var(--encre); outline-offset: -1px; }
+  button, label.bouton {
+    display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 1rem;
+    border: 1px solid var(--encre); background: transparent; color: var(--encre); font: inherit; cursor: pointer;
+    white-space: nowrap; -webkit-tap-highlight-color: transparent;
+  }
+  button:disabled { opacity: .4; cursor: default; }
+  button:focus-visible { outline: 2px solid var(--encre); outline-offset: 2px; }
+  .ligne > label.bouton { flex: 1; }
+  input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  input[type=file]:focus-visible + label.bouton { outline: 2px solid var(--encre); outline-offset: 2px; }
+  input[type=file]:disabled + label.bouton { opacity: .4; cursor: default; }
+
+  .bascule { display: grid; grid-template-columns: 1fr 1fr; clear: both; border: 1px solid var(--encre); }
+  .bascule input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  .bascule label {
+    display: flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 .5rem;
+    cursor: pointer; -webkit-tap-highlight-color: transparent;
+  }
+  .bascule label + input + label { border-left: 1px solid var(--encre); }
+  .bascule input:checked + label { background: var(--encre); color: var(--fond); }
+  .bascule input:focus-visible + label { outline: 2px solid var(--encre); outline-offset: 2px; }
+  .bascule input:disabled + label { opacity: .4; cursor: default; }
+
+  @media (prefers-color-scheme: dark) {
+    :root { --fond:#161614; --encre:#ecebe6; --gris:#9a978e; --filet:#34332f; --alerte:#e08a8a; }
+    #panneau { box-shadow: 0 2px 12px rgba(0, 0, 0, .5); }
+  }
+</style>
+</head>
+<body>
+<div id="carte"></div>
+
+<section id="panneau" aria-label="Commandes de l'essai">
+  <div class="tete">
+    <button id="encoche" type="button" aria-expanded="true" aria-controls="corps" title="Replier le panneau">
+      <span class="chevron" aria-hidden="true"></span>
+    </button>
+    <h1>Carte et couche WebGL</h1>
+    <a href="../../">Accueil</a>
+  </div>
+
+  <dl class="compteurs">
+    <dt title="Segments indexés dans la couche WebGL">Segments</dt><dd id="nb-segments">0</dd>
+    <dt title="Tuiles couvrant la vue, au dernier rendu">Tuiles</dt><dd id="nb-tuiles">0</dd>
+    <dt title="Images par seconde du navigateur (requestAnimationFrame)">Images/s</dt><dd id="ips">0</dd>
+    <dt title="Rendus de la couche WebGL par seconde (0 quand la carte est immobile)">Rendus/s</dt><dd id="rps">0</dd>
+    <dt title="Durée moyenne d'un rendu de la couche, côté processeur">Rendu</dt><dd id="duree-rendu">0 ms</dd>
+    <dt title="Dernière préparation de tampons : nombre de tuiles et durée">Tuiles faites</dt><dd id="duree-construction">0 ms</dd>
+  </dl>
+
+  <div id="corps">
+    <fieldset>
+      <legend>Fond Esri</legend>
+      <div class="ligne">
+        <input id="cle" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"
+               placeholder="Clé API Esri" aria-label="Clé API Esri">
+        <button id="enregistrer" type="button">Enregistrer</button>
+      </div>
+      <div class="bascule" role="radiogroup" aria-label="Fond de carte">
+        <input type="radio" name="fond" id="fond-topo" value="arcgis/topographic" checked disabled>
+        <label for="fond-topo">Topographique</label>
+        <input type="radio" name="fond" id="fond-imagerie" value="arcgis/imagery" disabled>
+        <label for="fond-imagerie">Imagerie</label>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Plan</legend>
+      <div class="ligne">
+        <input type="file" id="fichier" disabled>
+        <label class="bouton" for="fichier">Ouvrir un fichier .lignes</label>
+      </div>
+      <div class="ligne">
+        <span class="etiquette">N</span>
+        <input id="nombre" type="number" min="1" max="5000000" step="1" value="500000" inputmode="numeric"
+               aria-label="Nombre de segments à générer">
+        <button id="generer" type="button" disabled>Générer</button>
+      </div>
+    </fieldset>
+  </div>
+
+  <ul id="messages" aria-live="polite"></ul>
+</section>
+
+<script type="module" src="carte.js"></script>
+</body>
+</html>
