@@ -22,17 +22,45 @@ fn zip_mixte() -> Vec<u8> {
 
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
-fn mesure_un_zip_avec_un_dwg_valide_et_un_casse() {
-    let json = mesurer_zip_json(&zip_mixte()).unwrap();
+fn liste_les_dwg_du_zip() {
+    let json = lister_dwg_json(&zip_mixte()).unwrap();
+    assert_eq!(json, "[\"a.dwg\",\"b.dwg\"]");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn mesure_un_dwg_valide() {
+    let json = mesurer_dwg_json(&zip_mixte(), "a.dwg").unwrap();
+    assert!(json.starts_with("{\"chemin\":\"a.dwg\",\"duree_ms\":"));
     assert!(json.contains("\"LINE\":2"));
-    assert!(json.contains("\"chemin\":\"b.dwg\",\"duree_ms\":"));
+    assert!(json.contains("\"mesure\""));
+    assert!(!json.contains("\"erreur\""));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn un_dwg_casse_donne_un_element_en_erreur_sans_gener_les_autres() {
+    let zip = zip_mixte();
+    let casse = mesurer_dwg_json(&zip, "b.dwg").unwrap();
+    assert!(casse.contains("\"chemin\":\"b.dwg\",\"duree_ms\":"));
+    assert!(casse.contains("\"erreur\""));
+    assert!(mesurer_dwg_json(&zip, "a.dwg").unwrap().contains("\"LINE\":2"));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn un_chemin_absent_du_zip_donne_un_element_en_erreur() {
+    let json = mesurer_dwg_json(&zip_mixte(), "absent.dwg").unwrap();
+    assert!(json.contains("\"chemin\":\"absent.dwg\""));
     assert!(json.contains("\"erreur\""));
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn zip_illisible_donne_une_erreur() {
-    assert!(mesurer_zip_json(b"pas un zip").is_err());
+    assert!(lister_dwg_json(b"pas un zip").is_err());
+    let json = mesurer_dwg_json(b"pas un zip", "a.dwg").unwrap();
+    assert!(json.contains("\"erreur\""));
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -41,10 +69,11 @@ mod wasm {
     use wasm_bindgen_test::wasm_bindgen_test;
 
     #[wasm_bindgen_test]
-    fn mesure_un_zip_avec_un_dwg_valide_et_un_casse() {
-        let json = mesurer_zip(&zip_mixte()).unwrap();
-        assert!(json.contains("\"LINE\":2"));
-        assert!(json.contains("\"chemin\":\"b.dwg\",\"duree_ms\":"));
-        assert!(json.contains("\"erreur\""));
+    fn liste_et_mesure_un_dwg_valide_puis_un_casse() {
+        assert_eq!(lister_dwg(&zip_mixte()).unwrap(), "[\"a.dwg\",\"b.dwg\"]");
+        assert!(mesurer_dwg(&zip_mixte(), "a.dwg").unwrap().contains("\"LINE\":2"));
+        let casse = mesurer_dwg(&zip_mixte(), "b.dwg").unwrap();
+        assert!(casse.contains("\"chemin\":\"b.dwg\",\"duree_ms\":"));
+        assert!(casse.contains("\"erreur\""));
     }
 }

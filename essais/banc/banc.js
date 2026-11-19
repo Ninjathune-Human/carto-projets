@@ -1,3 +1,5 @@
+import { creerPilote } from "./pilote.js";
+
 const zone = document.getElementById("zone");
 const entree = document.getElementById("fichiers");
 const corps = document.querySelector("#resultats tbody");
@@ -6,33 +8,7 @@ const bouton = document.getElementById("copier");
 
 const lignesCsv = [];
 let file = Promise.resolve();
-let worker = null;
-
-function nouveauWorker() {
-  if (worker) worker.terminate();
-  worker = new Worker("./worker.js", { type: "module" });
-}
-
-function mesurerDansWorker(nom, octets) {
-  return new Promise((resolve, reject) => {
-    if (!worker) nouveauWorker();
-    worker.onmessage = (e) => {
-      if (e.data.erreur) {
-        nouveauWorker();
-        reject(new Error(e.data.erreur));
-      } else resolve(e.data);
-    };
-    worker.onmessageerror = () => {
-      nouveauWorker();
-      reject(new Error("réponse illisible du lecteur"));
-    };
-    worker.onerror = (e) => {
-      nouveauWorker();
-      reject(new Error("le lecteur s'est arrêté (" + (e.message || "erreur fatale") + ")"));
-    };
-    worker.postMessage({ nom, octets }, [octets]);
-  });
-}
+const pilote = creerPilote({ creerWorker: () => new Worker("./worker.js", { type: "module" }) });
 
 function cellule(tr, texte, classe) {
   const td = document.createElement("td");
@@ -56,33 +32,48 @@ function fmt(ms) {
   return typeof ms === "number" ? ms.toFixed(1) : "";
 }
 
+function enregistrer(fichier, el) {
+  if (el.mesure) {
+    const m = el.mesure;
+    ajouterLigne(fichier.name, el.chemin, String(m.total), String(m.inconnues), fmt(el.duree_ms), "");
+    const types = Object.entries(m.par_type);
+    if (types.length === 0) {
+      lignesCsv.push([fichier.name, el.chemin, "acadrust-wasm", m.version, el.duree_ms, "", 0, ""]);
+    }
+    for (const [type, nombre] of types) {
+      lignesCsv.push([fichier.name, el.chemin, "acadrust-wasm", m.version, el.duree_ms, type, nombre, ""]);
+    }
+  } else {
+    ajouterLigne(fichier.name, el.chemin, "", "", fmt(el.duree_ms), el.erreur);
+    lignesCsv.push([fichier.name, el.chemin, "acadrust-wasm", "", el.duree_ms, "", 0, el.erreur]);
+  }
+}
+
+// Un DWG par message (R15) : une panne, un message illisible ou un délai dépassé ne coûte que
+// le DWG en cours ; le pilote recrée le worker et la suite du ZIP est mesurée.
 async function traiter(fichier) {
-  statut.textContent = "Lecture de " + fichier.name + "…";
+  const lireOctets = () => fichier.arrayBuffer();
+  let chemins;
   try {
-    const octets = await fichier.arrayBuffer();
-    const r = await mesurerDansWorker(fichier.name, octets);
-    if (r.resultats.length === 0) {
-      ajouterLigne(fichier.name, "", "", "", fmt(r.duree_zip_ms), "aucun DWG dans le ZIP");
-    }
-    for (const el of r.resultats) {
-      if (el.mesure) {
-        const m = el.mesure;
-        ajouterLigne(fichier.name, el.chemin, String(m.total), String(m.inconnues), fmt(el.duree_ms), "");
-        const types = Object.entries(m.par_type);
-        if (types.length === 0) {
-          lignesCsv.push([fichier.name, el.chemin, "acadrust-wasm", m.version, el.duree_ms, "", 0, ""]);
-        }
-        for (const [type, nombre] of types) {
-          lignesCsv.push([fichier.name, el.chemin, "acadrust-wasm", m.version, el.duree_ms, type, nombre, ""]);
-        }
-      } else {
-        ajouterLigne(fichier.name, el.chemin, "", "", fmt(el.duree_ms), el.erreur);
-        lignesCsv.push([fichier.name, el.chemin, "acadrust-wasm", "", el.duree_ms, "", 0, el.erreur]);
-      }
-    }
+    statut.textContent = "Lecture de " + fichier.name + "…";
+    chemins = await pilote.lister(fichier, lireOctets);
   } catch (err) {
     ajouterLigne(fichier.name, "", "", "", "", err.message);
     lignesCsv.push([fichier.name, "", "acadrust-wasm", "", "", "", 0, err.message]);
+    return;
+  }
+  if (chemins.length === 0) {
+    ajouterLigne(fichier.name, "", "", "", "", "aucun DWG dans le ZIP");
+    return;
+  }
+  for (const [i, chemin] of chemins.entries()) {
+    statut.textContent = fichier.name + " : DWG " + (i + 1) + " sur " + chemins.length + "…";
+    try {
+      enregistrer(fichier, await pilote.mesurer(fichier, lireOctets, chemin));
+    } catch (err) {
+      ajouterLigne(fichier.name, chemin, "", "", "", err.message);
+      lignesCsv.push([fichier.name, chemin, "acadrust-wasm", "", "", "", 0, err.message]);
+    }
   }
 }
 
