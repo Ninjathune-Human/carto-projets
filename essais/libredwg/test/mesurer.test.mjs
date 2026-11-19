@@ -45,3 +45,28 @@ test("un ZIP illisible donne une ligne sans chemin", async () => {
   assert.equal(lignes[0].chemin, "");
   assert.ok(lignes[0].erreur);
 });
+
+// ZIP dont un nom d'entrée est écrit en octets bruts, sans l'indicateur UTF-8 (bit 11) : on part d'un
+// nom ASCII "Fa_ade.dwg" et on remplace l'octet 0x5F par `octet` dans les en-têtes local et central.
+function zipAvecNomBrut(octetBrut, contenu) {
+  const zip = Buffer.from(zipSync({ "Plans\\Fa_ade.dwg": new Uint8Array(contenu) }));
+  const cible = Buffer.from("Fa_ade.dwg");
+  let n = 0;
+  for (let i = zip.indexOf(cible); i >= 0; i = zip.indexOf(cible, i + 1)) {
+    zip[i + 2] = octetBrut;
+    n++;
+  }
+  assert.equal(n, 2, "en-têtes local et central");
+  return zip;
+}
+
+test("un nom CP437 sans indicateur UTF-8 est décodé comme le fait le crate zip (Façade)", async () => {
+  const lignes = await mesurerZip(zipAvecNomBrut(0x87, fixture), "t.zip");
+  assert.equal(lignes[0].chemin, "Plans/Façade.dwg");
+  assert.deepEqual(lignes.filter((l) => l.type).map((l) => [l.type, l.nombre]).sort(), [["CIRCLE", 1], ["LINE", 2]]);
+});
+
+test("un nom UTF-8 avec indicateur (bit 11) reste en UTF-8", async () => {
+  const lignes = await mesurerZip(zipAvec("Plans/Façade.dwg", fixture), "t.zip");
+  assert.equal(lignes[0].chemin, "Plans/Façade.dwg");
+});

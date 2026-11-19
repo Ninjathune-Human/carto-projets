@@ -124,3 +124,14 @@ def test_comparer_exclut_les_sous_entites_avant_normalisation(tmp_path):
     ecrire(tmp_path / "a.csv", [["S.zip", "p.dwg", "lecteurA", "x", 1, "LINE", 2, ""]])
     comparer(tmp_path, tmp_path / "s.md")
     assert "100,0 %" in (tmp_path / "s.md").read_text(encoding="utf-8")
+
+
+def test_cle_normalise_unicode_nfc_avant_la_casse():
+    import unicodedata
+    from comparer import _cle
+    nfd = unicodedata.normalize("NFD", "Plans/Façade.DWG")
+    nfc = unicodedata.normalize("NFC", "Plans/Façade.dwg")
+    assert nfd != nfc
+    assert _cle("Dossier.zip", nfd) == _cle("DOSSIER.zip", nfc)
+    # variante : majuscule accentuée, repliée après composition
+    assert _cle("a.zip", unicodedata.normalize("NFD", "É.dwg")) == _cle("a.zip", "é.dwg")

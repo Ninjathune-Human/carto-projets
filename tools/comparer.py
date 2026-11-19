@@ -2,6 +2,7 @@
 import csv
 import statistics
 import sys
+import unicodedata
 from collections import defaultdict
 from pathlib import Path
 
@@ -46,10 +47,10 @@ def taux(ref: dict[str, int], lu: dict[str, int]) -> float | None:
 
 
 def _cle(fichier: str, chemin: str) -> tuple[str, str]:
-    c = chemin.replace("\\", "/")
+    c = unicodedata.normalize("NFC", chemin.replace("\\", "/"))
     if c.lower().endswith(".dwg"):
         c = c[:-4]
-    return fichier.lower(), c.lower()
+    return unicodedata.normalize("NFC", fichier).lower(), c.lower()
 
 
 def _lire_csv(dossier: Path):

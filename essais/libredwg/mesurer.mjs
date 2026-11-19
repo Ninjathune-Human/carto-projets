@@ -11,6 +11,43 @@ const LECTEUR = "libredwg";
 const SOUS_ENTITES = new Set(["ATTRIB", "SEQEND", "VERTEX"]);
 const ENTETE = ["fichier", "chemin", "lecteur", "version", "duree_ms", "type", "nombre", "erreur"];
 
+// Noms d'entrées de ZIP, décodés comme le crate zip côté Rust : UTF-8 si les octets le sont
+// (cas de l'indicateur de l'octet 11), sinon CP437. fflate, lui, lit en Latin-1 sans l'indicateur.
+const CP437_HAUT = "ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥₧ƒáíóúñÑªº¿⌐¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐└┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀αßΓπΣσµτΦΘΩδ∞φε∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■ ";
+
+function decoderNom(octets) {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(octets);
+  } catch {
+    return Array.from(octets, (o) => (o < 0x80 ? String.fromCharCode(o) : CP437_HAUT[o - 0x80])).join("");
+  }
+}
+
+// Table nom fflate -> nom corrigé, lue dans le répertoire central ; null si la structure n'est pas lisible
+// (alors les noms de fflate restent tels quels).
+function nomsCorriges(zip) {
+  const vue = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
+  let eocd = -1;
+  for (let i = zip.length - 22; i >= Math.max(0, zip.length - 22 - 65535); i--) {
+    if (vue.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) return null;
+  const total = vue.getUint16(eocd + 10, true);
+  let p = vue.getUint32(eocd + 16, true);
+  if (total === 0xffff || p === 0xffffffff) return null; // ZIP64
+  const table = new Map();
+  for (let n = 0; n < total; n++) {
+    if (p + 46 > zip.length || vue.getUint32(p, true) !== 0x02014b50) return null;
+    const drapeaux = vue.getUint16(p + 8, true);
+    const [ln, le, lc] = [vue.getUint16(p + 28, true), vue.getUint16(p + 30, true), vue.getUint16(p + 32, true)];
+    const brut = zip.subarray(p + 46, p + 46 + ln);
+    const nomFflate = drapeaux & 0x800 ? new TextDecoder().decode(brut) : String.fromCharCode(...brut);
+    table.set(nomFflate, decoderNom(brut));
+    p += 46 + ln + le + lc;
+  }
+  return table;
+}
+
 let libre = null;
 async function lib() {
   libre ??= await LibreDwg.create();
@@ -66,13 +103,16 @@ async function mesurerDwg(fichier, chemin, octets) {
 
 export async function mesurerZip(octetsZip, nomZip) {
   let entrees;
+  let corriges = null;
   try {
-    entrees = unzipSync(new Uint8Array(octetsZip), { filter: (f) => /\.dwg$/i.test(f.name) });
+    const zip = new Uint8Array(octetsZip);
+    entrees = unzipSync(zip, { filter: (f) => /\.dwg$/i.test(f.name) });
+    corriges = nomsCorriges(zip);
   } catch (e) {
     return [ligne(nomZip, "", { erreur: `ZIP illisible : ${message(e)}` })];
   }
   const dwgs = Object.entries(entrees)
-    .map(([nom, octets]) => [nom.replace(/\\/g, "/"), octets])
+    .map(([nom, octets]) => [(corriges?.get(nom) ?? nom).replace(/\\/g, "/"), octets])
     .filter(([nom]) => /\.dwg$/i.test(nom))
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   const lignes = [];
