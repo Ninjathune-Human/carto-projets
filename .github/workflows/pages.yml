@@ -1,0 +1,46 @@
+name: pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Installer Rust stable et la cible wasm32
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+      - name: Installer wasm-pack
+        run: cargo install wasm-pack --locked
+      - name: Tests natifs
+        run: cargo test --workspace
+      - name: Tests wasm (Node)
+        run: wasm-pack test --node crates/wasm
+      - name: Construire le module wasm
+        run: wasm-pack build crates/wasm --target web --release --out-dir ../../essais/banc/pkg
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+      - name: Publier sur Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+      - name: Déplacer le tag deploye
+        run: git tag -f deploye "$GITHUB_SHA" && git push -f origin deploye
