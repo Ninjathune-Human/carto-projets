@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Sources open data</title>
+<style>
+  :root { --fond:#f7f6f2; --encre:#1c1c1a; --gris:#6f6d66; --filet:#d9d6cc; }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--fond); color: var(--encre);
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.5; -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 64rem; margin: 0 auto; padding: 6vh 1.25rem 6vh; }
+  h1 { font-size: clamp(1.75rem, 5vw, 2.5rem); font-weight: 300; letter-spacing: -0.02em; margin: 0 0 .75rem; }
+  p { margin: 0 0 1.5rem; color: var(--gris); max-width: 42rem; }
+  .retour { display: inline-block; margin-bottom: 1.5rem; color: var(--gris); text-decoration: none; min-height: 44px; line-height: 44px; }
+  .retour:hover, .retour:focus-visible { color: var(--encre); }
+  .barre { display: flex; flex-wrap: wrap; gap: .75rem; margin-bottom: 1rem; }
+  button {
+    min-height: 44px; padding: 0 1.1rem; font: inherit; color: var(--encre); background: transparent;
+    border: 1px solid var(--encre); cursor: pointer;
+  }
+  button:disabled { color: var(--gris); border-color: var(--filet); cursor: default; }
+  #etat { min-height: 1.5rem; margin: 0 0 1rem; font-size: .9rem; }
+  .defil { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  th, td { text-align: left; padding: .55rem .6rem; border-bottom: 1px solid var(--filet); vertical-align: top; }
+  th { color: var(--gris); font-weight: 400; border-top: 1px solid var(--filet); }
+  tr.couche td:first-child { padding-left: 1.6rem; color: var(--gris); }
+  @media (prefers-color-scheme: dark) {
+    :root { --fond:#161614; --encre:#ecebe6; --gris:#9a978e; --filet:#34332f; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <a class="retour" href="../../">Retour</a>
+  <h1>Sources open data</h1>
+  <p>Vérifie depuis le navigateur quelles sources acceptent les requêtes entre origines (CORS) et si les annexes du PLU et les servitudes couvrent Nice seule ou toute la Métropole.</p>
+  <div class="barre">
+    <button id="lancer" type="button">Lancer les vérifications</button>
+    <button id="copier" type="button" disabled>Copier en Markdown</button>
+  </div>
+  <p id="etat" role="status" aria-live="polite"></p>
+  <div class="defil">
+    <table>
+      <thead><tr><th>Source</th><th>Producteur</th><th>Type</th><th>Statut</th><th>Couverture</th></tr></thead>
+      <tbody id="corps"></tbody>
+    </table>
+  </div>
+</main>
+<script type="module" src="sources.js"></script>
+</body>
+</html>
