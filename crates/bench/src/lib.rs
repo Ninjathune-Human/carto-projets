@@ -1,5 +1,6 @@
 //! Banc natif : mesure des DWG des ZIP d'un dossier et écriture de CSV.
-use carto_cad::{inventorier, lire_entree, mesurer, ErreurCad};
+use carto_cad::{ecrire_lignes, extraire_lignes, inventorier, lire_document, lire_entree, mesurer, ErreurCad};
+use carto_georef::l93_vers_mercator;
 use std::fs::File;
 use std::io;
 use std::path::Path;
@@ -102,4 +103,21 @@ pub fn mesurer_dossier(zips: &Path, sortie: &Path) -> io::Result<()> {
     mesures.flush()?;
     emprises.flush()?;
     Ok(())
+}
+
+/// Exporte les lignes d'un DWG d'un ZIP vers un `.lignes` en Web Mercator.
+/// Coordonnées × `facteur` (vers mètres L93), puis `l93_vers_mercator`. Retourne (polylignes, points).
+pub fn exporter_lignes(zip: &Path, chemin: &str, facteur: f64, sortie: &Path) -> Result<(usize, usize), String> {
+    let octets = std::fs::read(zip).map_err(|e| format!("{} : {e}", zip.display()))?;
+    let dwg = lire_entree(&octets, chemin).map_err(|e| e.to_string())?;
+    let doc = lire_document(&dwg).map_err(|e| e.to_string())?;
+    let mut polys = extraire_lignes(&doc);
+    for p in &mut polys {
+        for pt in &mut p.points {
+            let (x, y) = l93_vers_mercator(pt[0] * facteur, pt[1] * facteur).map_err(|e| e.to_string())?;
+            *pt = [x, y];
+        }
+    }
+    std::fs::write(sortie, ecrire_lignes(&polys)).map_err(|e| format!("{} : {e}", sortie.display()))?;
+    Ok((polys.len(), polys.iter().map(|p| p.points.len()).sum()))
 }

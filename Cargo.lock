@@ -67,6 +67,7 @@ version = "0.1.0"
 dependencies = [
  "acadrust",
  "carto-cad",
+ "carto-georef",
  "csv",
  "tempfile",
  "zip",
