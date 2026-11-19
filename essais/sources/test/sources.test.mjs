@@ -34,3 +34,11 @@ test("catalogue.json", async () => {
   const serv = ids("PLU_Servitudes");
   for (const n of [26, 28]) assert.ok(serv.includes(n), "servitudes " + n);
 });
+
+test("couverture : étendue vide ou incomplète donne inconnue", () => {
+  const nice = { xmin: 0, ymin: 0, xmax: 10, ymax: 10 }, nca = { xmin: -50, ymin: -50, xmax: 50, ymax: 50 };
+  assert.equal(classerCouverture({ xmin: "NaN", ymin: "NaN", xmax: "NaN", ymax: "NaN" }, nice, nca), "inconnue");
+  assert.equal(classerCouverture({ xmin: NaN, ymin: NaN, xmax: NaN, ymax: NaN }, nice, nca), "inconnue");
+  assert.equal(classerCouverture({ xmin: 1, ymin: 1, xmax: 9 }, nice, nca), "inconnue");
+  assert.equal(classerCouverture({ xmin: "1", ymin: "1", xmax: "9", ymax: "9" }, nice, nca), "Nice");
+});

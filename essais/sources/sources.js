@@ -10,12 +10,25 @@ export function classerReponse({ ok, status, json, erreurReseau } = {}) {
 
 const TOLERANCE = 1e-6;
 
+// Étendue aux quatre valeurs finies (chaînes numériques admises), sinon null.
+function normaliser(b) {
+  if (!b) return null;
+  const r = {};
+  for (const k of ["xmin", "ymin", "xmax", "ymax"]) {
+    if (b[k] === null || b[k] === undefined || b[k] === "") return null;
+    r[k] = Number(b[k]);
+    if (!Number.isFinite(r[k])) return null;
+  }
+  return r;
+}
+
 // CRS-agnostique : les trois étendues doivent partager le même système de coordonnées.
 export function classerCouverture(etendue, bboxNice, bboxMetropole) {
-  if (!etendue || !bboxNice) return "inconnue";
+  const e = normaliser(etendue), n = normaliser(bboxNice);
+  if (!e || !n) return "inconnue";
   const t = TOLERANCE;
-  const dedans = etendue.xmin >= bboxNice.xmin - t && etendue.ymin >= bboxNice.ymin - t
-    && etendue.xmax <= bboxNice.xmax + t && etendue.ymax <= bboxNice.ymax + t;
+  const dedans = e.xmin >= n.xmin - t && e.ymin >= n.ymin - t
+    && e.xmax <= n.xmax + t && e.ymax <= n.ymax + t;
   return dedans ? "Nice" : "Métropole";
 }
 
