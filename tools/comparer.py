@@ -53,6 +53,24 @@ def _pct(x) -> str:
     return "—" if x is None else f"{x * 100:.1f}".replace(".", ",") + " %"
 
 
+def attribuer_identifiants(refs: dict[tuple, dict]):
+    """Identifiants anonymes : P01… par ZIP trié, P01-1… par DWG trié dans le ZIP.
+
+    refs : cle (voir _cle) -> {"fichier", "chemin", ...}.
+    Retourne (zips, id_zip, id_dwg, correspondance).
+    """
+    zips = sorted({e["fichier"] for e in refs.values()})
+    id_zip = {z: f"P{i:02d}" for i, z in enumerate(zips, 1)}
+    id_dwg, correspondance = {}, []
+    for z in zips:
+        correspondance.append((id_zip[z], z))
+        cles = sorted((k for k, e in refs.items() if e["fichier"] == z), key=lambda k: k[1])
+        for i, k in enumerate(cles, 1):
+            id_dwg[k] = f"{id_zip[z]}-{i}"
+            correspondance.append((id_dwg[k], f"{z} / {refs[k]['chemin']}"))
+    return zips, id_zip, id_dwg, correspondance
+
+
 def comparer(dossier_resultats: Path, sortie_md: Path) -> None:
     dossier = Path(dossier_resultats)
     refs: dict[tuple, dict] = {}   # cle -> {"fichier","chemin","comptes"}
@@ -71,16 +89,7 @@ def comparer(dossier_resultats: Path, sortie_md: Path) -> None:
         if l.get("type"):
             e["comptes"][l["type"]] = e["comptes"].get(l["type"], 0) + _entier(l["nombre"])
 
-    # identifiants anonymes
-    zips = sorted({e["fichier"] for e in refs.values()})
-    id_zip = {z: f"P{i:02d}" for i, z in enumerate(zips, 1)}
-    id_dwg, correspondance = {}, []
-    for z in zips:
-        correspondance.append((id_zip[z], z))
-        cles = sorted((k for k, e in refs.items() if e["fichier"] == z), key=lambda k: k[1])
-        for i, k in enumerate(cles, 1):
-            id_dwg[k] = f"{id_zip[z]}-{i}"
-            correspondance.append((id_dwg[k], f"{z} / {refs[k]['chemin']}"))
+    zips, id_zip, id_dwg, correspondance = attribuer_identifiants(refs)
     ordre = sorted(refs, key=lambda k: (id_zip[refs[k]["fichier"]], int(id_dwg[k].split("-")[1])))
 
     noms = sorted(lecteurs)
