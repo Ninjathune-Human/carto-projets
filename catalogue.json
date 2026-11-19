@@ -1,0 +1,36 @@
+[
+  { "id": "plum", "titre": "PLU et PLUm", "producteur": "Métropole Nice Côte d'Azur", "theme": "Urbanisme", "type": "arcgis-mapserver",
+    "url": "https://cartes.nicecotedazur.org/heberge2/rest/services/PLU/PLUm/MapServer" },
+  { "id": "plu-annexes", "titre": "Annexes du PLU", "producteur": "Métropole Nice Côte d'Azur", "theme": "Réseaux et risques", "type": "arcgis-mapserver",
+    "url": "https://cartes.nicecotedazur.org/server/rest/services/PLU_Annexes/PLU_Annexes/MapServer",
+    "couches": [
+      { "id": 32, "nom": "Canalisations des eaux potables" },
+      { "id": 36, "nom": "Canalisation des Eaux Usées" },
+      { "id": 48, "nom": "PPRI Var Nice et PPR Paillon - fort" },
+      { "id": 49, "nom": "PPRI Var Nice et PPR Paillon - modéré" },
+      { "id": 52, "nom": "PPRIF Nice - fort et modéré" },
+      { "id": 53, "nom": "Risque naturel de mouvements de terrain - fort" },
+      { "id": 54, "nom": "Risque naturel de mouvements de terrain - modéré" },
+      { "id": 200, "nom": "Canalisation Eaux Pluviales" }
+    ] },
+  { "id": "cadastre", "titre": "Cadastre", "producteur": "Métropole Nice Côte d'Azur", "theme": "Cadastre", "type": "arcgis-mapserver",
+    "url": "https://cartes.nicecotedazur.org/heberge2/rest/services/Cadastre/Cadastre/MapServer" },
+  { "id": "servitudes", "titre": "Servitudes du PLU", "producteur": "Métropole Nice Côte d'Azur", "theme": "Servitudes", "type": "arcgis-mapserver",
+    "url": "https://cartes.nicecotedazur.org/heberge2/rest/services/Servitudes/PLU_Servitudes/MapServer",
+    "couches": [
+      { "id": 26, "nom": "Conduites Souterraines (gaz)" },
+      { "id": 28, "nom": "Lignes (EDF)" }
+    ] },
+  { "id": "limite-metropole", "titre": "Limite de la Métropole Nice Côte d'Azur", "producteur": "data.gouv.fr", "theme": "Limites administratives", "type": "datagouv-api",
+    "url": "https://www.data.gouv.fr/api/1/datasets/limite-de-la-metropole-nice-cote-d-azur/" },
+  { "id": "ppri-ddtm06", "titre": "PPRI, zonage (DDTM 06)", "producteur": "DDTM des Alpes-Maritimes", "theme": "Risques", "type": "datagouv-api",
+    "url": "https://www.data.gouv.fr/api/1/datasets/ddtm-06-plans-de-prevention-des-risques-naturels-dinondation-zonage/" },
+  { "id": "enedis-bt", "titre": "Réseau souterrain basse tension", "producteur": "Enedis", "theme": "Réseaux", "type": "opendatasoft",
+    "url": "https://data.enedis.fr/api/explore/v2.1/catalog/datasets/reseau-souterrain-bt/records?limit=1" },
+  { "id": "enedis-hta", "titre": "Réseau souterrain HTA", "producteur": "Enedis", "theme": "Réseaux", "type": "opendatasoft",
+    "url": "https://data.enedis.fr/api/explore/v2.1/catalog/datasets/reseau-souterrain-hta/records?limit=1" },
+  { "id": "geopf-wfs", "titre": "Flux WFS de la Géoplateforme", "producteur": "IGN", "theme": "Référentiel", "type": "wfs",
+    "url": "https://data.geopf.fr/wfs/ows?SERVICE=WFS&REQUEST=GetCapabilities" },
+  { "id": "api-geo-nice", "titre": "Contour de la commune de Nice", "producteur": "Etalab (API Découpage administratif)", "theme": "Limites administratives", "type": "api-geo",
+    "url": "https://geo.api.gouv.fr/communes/06088?format=geojson&geometry=contour" }
+]

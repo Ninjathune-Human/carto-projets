@@ -4,3 +4,4 @@ node_modules/
 essais/**/pkg/
 .superpowers/
 __pycache__/
+_site/

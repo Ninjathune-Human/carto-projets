@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>carto-projets</title>
+<style>
+  :root { --fond:#f7f6f2; --encre:#1c1c1a; --gris:#6f6d66; --filet:#d9d6cc; }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--fond); color: var(--encre);
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.6; -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 40rem; margin: 0 auto; padding: 12vh 1.5rem 8vh; }
+  h1 { font-size: clamp(2rem, 6vw, 3rem); font-weight: 300; letter-spacing: -0.02em; margin: 0 0 1.25rem; }
+  p { margin: 0 0 3.5rem; color: var(--gris); font-size: 1.05rem; max-width: 34rem; }
+  ul { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--filet); }
+  li { border-bottom: 1px solid var(--filet); }
+  a {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 1.1rem 0; color: var(--encre); text-decoration: none; font-size: 1.1rem;
+    min-height: 44px; transition: padding-left .2s ease, color .2s ease;
+  }
+  a::after { content: "\2192"; color: var(--gris); }
+  a:hover, a:focus-visible { padding-left: .5rem; color: #000; outline: none; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fond:#161614; --encre:#ecebe6; --gris:#9a978e; --filet:#34332f; }
+    a:hover, a:focus-visible { color: #fff; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>carto-projets</h1>
+  <p>Versement de projets AutoCAD sur carte ArcGIS, Métropole Nice Côte d'Azur : phase 0, essais.</p>
+  <ul>
+    <li><a href="essais/banc/">Banc de lecture DWG</a></li>
+    <li><a href="essais/carte/">Carte et couche WebGL</a></li>
+    <li><a href="essais/sources/">Sources open data</a></li>
+  </ul>
+</main>
+</body>
+</html>

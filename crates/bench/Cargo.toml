@@ -1,0 +1,22 @@
+[package]
+name = "carto-bench"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "carto_bench"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bench"
+path = "src/main.rs"
+
+[dependencies]
+carto-cad = { path = "../cad" }
+carto-georef = { path = "../georef" }
+csv = "1"
+
+[dev-dependencies]
+tempfile = "3"
+zip = { version = "9.7.3", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+acadrust = { version = "0.6.8", default-features = false }

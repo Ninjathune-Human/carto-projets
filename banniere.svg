@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 320" width="1280" height="320" role="img" aria-label="carto-projets">
+  <rect width="1280" height="320" fill="#f7f6f2"/>
+  <g fill="none" stroke="#d9d6cc" stroke-width="1">
+    <path d="M640 0 C700 80 760 90 840 160 S1000 260 1280 230"/>
+    <path d="M600 0 C660 90 720 110 800 180 S980 300 1280 270"/>
+    <path d="M700 0 C760 70 820 70 900 140 S1060 220 1280 190"/>
+    <path d="M760 0 V320 M920 0 V320 M1080 0 V320 M1240 0 V320"/>
+    <path d="M600 80 H1280 M600 160 H1280 M600 240 H1280"/>
+  </g>
+  <g fill="none" stroke="#1c1c1a" stroke-width="2">
+    <path d="M830 70 H1110 V210 H900 V140 H830 Z"/>
+    <path d="M900 140 H1030 V210"/>
+    <path d="M1110 120 H1160 V210 H1110"/>
+  </g>
+  <circle cx="830" cy="70" r="4" fill="#1c1c1a"/>
+  <text x="80" y="160" font-family="Helvetica, Arial, sans-serif" font-size="64" font-weight="300" fill="#1c1c1a" letter-spacing="-1">carto-projets</text>
+  <text x="82" y="205" font-family="Helvetica, Arial, sans-serif" font-size="22" fill="#6f6d66">Projets AutoCAD sur carte · Métropole Nice Côte d'Azur</text>
+</svg>

@@ -1,0 +1,10 @@
+[package]
+name = "carto-cad"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+acadrust = { version = "0.6.8", default-features = false }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2.0.21"
+zip = { version = "9.7.3", default-features = false, features = ["deflate-flate2-zlib-rs"] }

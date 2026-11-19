@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Banc de lecture DWG</title>
+<style>
+  :root { --fond:#f7f6f2; --encre:#1c1c1a; --gris:#6f6d66; --filet:#d9d6cc; --alerte:#9b2c2c; }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--fond); color: var(--encre);
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.6; -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 64rem; margin: 0 auto; padding: 8vh 1.5rem 8vh; }
+  h1 { font-size: clamp(1.8rem, 5vw, 2.5rem); font-weight: 300; letter-spacing: -0.02em; margin: 0 0 1rem; }
+  p { margin: 0 0 2rem; color: var(--gris); max-width: 40rem; }
+  #zone {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .75rem;
+    min-height: 9rem; padding: 1.5rem; border: 1px dashed var(--gris); text-align: center; color: var(--gris);
+  }
+  #zone.actif { border-color: var(--encre); color: var(--encre); }
+  label.bouton, button {
+    display: inline-flex; align-items: center; min-height: 44px; padding: 0 1.1rem; cursor: pointer;
+    border: 1px solid var(--encre); background: transparent; color: var(--encre); font: inherit;
+  }
+  button:disabled { opacity: .4; cursor: default; }
+  input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  input[type=file]:focus-visible + label.bouton, button:focus-visible { outline: 2px solid var(--encre); outline-offset: 2px; }
+  #statut { margin: 1.25rem 0; color: var(--gris); min-height: 1.6em; }
+  .tableau { overflow-x: auto; border-top: 1px solid var(--filet); }
+  table { width: 100%; border-collapse: collapse; font-size: .95rem; }
+  th, td { text-align: left; padding: .6rem .75rem .6rem 0; border-bottom: 1px solid var(--filet); vertical-align: top; }
+  th { font-weight: 500; color: var(--gris); white-space: nowrap; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.err { color: var(--alerte); }
+  .actions { display: flex; gap: 1rem; align-items: center; margin-top: 1.5rem; flex-wrap: wrap; }
+  a { color: var(--encre); }
+  @media (prefers-color-scheme: dark) {
+    :root { --fond:#161614; --encre:#ecebe6; --gris:#9a978e; --filet:#34332f; --alerte:#e08a8a; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Banc de lecture DWG</h1>
+  <p>Déposez un ou plusieurs ZIP eTransmit : chaque DWG est lu dans le navigateur et ses entités sont comptées. Rien n'est envoyé hors de cet appareil.</p>
+  <div id="zone">
+    <span>Glissez des fichiers .zip ici</span>
+    <input type="file" id="fichiers" accept=".zip,application/zip" multiple>
+    <label class="bouton" for="fichiers">Choisir des ZIP</label>
+  </div>
+  <div id="statut" role="status" aria-live="polite">En attente de fichiers.</div>
+  <div class="tableau">
+    <table id="resultats">
+      <thead>
+        <tr>
+          <th>Fichier</th><th>DWG</th><th class="num">Entités</th><th class="num">Inconnues</th><th class="num">Durée ms</th><th>Erreur</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="actions">
+    <button id="copier" type="button" disabled>Copier en CSV</button>
+    <a href="../../">Retour à l'accueil</a>
+  </div>
+</main>
+<script src="banc.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+{
+  "name": "essais-libredwg",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "Banc de mesure libredwg-web (GPL-3.0 : utilisé uniquement pour les essais, jamais livré).",
+  "scripts": { "test": "node --test test/*.test.mjs" },
+  "dependencies": { "@mlightcad/libredwg-web": "0.9.0", "fflate": "^0.8.2" }
+}

@@ -1,0 +1,86 @@
+name: pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Installer Rust stable et la cible wasm32
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+      - name: Installer wasm-pack
+        run: cargo install wasm-pack --locked
+      - name: Tests natifs
+        run: cargo test --workspace
+      - name: Tests wasm (Node)
+        run: wasm-pack test --node crates/wasm
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Installer les dépendances de essais/libredwg
+        run: npm ci
+        working-directory: essais/libredwg
+      - name: Tests Node
+        run: >
+          node --test
+          'essais/banc/test/*.test.mjs'
+          'essais/carte/test/*.test.mjs'
+          'essais/sources/test/*.test.mjs'
+          'essais/libredwg/test/*.test.mjs'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Tests Python
+        run: |
+          pip install -r tools/requirements.txt
+          python3 -m pytest tools/tests
+      - name: Construire le module wasm
+        run: wasm-pack build crates/wasm --target web --release --out-dir ../../essais/banc/pkg
+      - name: Assembler le site (_site)
+        run: |
+          mkdir -p _site/essais
+          cp index.html banniere.svg catalogue.json _site/
+          if [ -d data ]; then cp -r data _site/data; fi
+          cp -r essais/banc essais/carte essais/sources _site/essais/
+          rm -rf _site/essais/carte/test _site/essais/sources/test
+          du -sh _site
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+      - name: Publier sur Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
+
+  tag:
+    needs: deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - name: Déplacer le tag deploye
+        run: git tag -f deploye "$GITHUB_SHA" && git push -f origin deploye
