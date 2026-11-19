@@ -49,7 +49,10 @@ async function mesurerDwg(fichier, chemin, octets) {
     const duree_ms = Math.round(performance.now() - debut);
     const version = db?.header?.ACADVER || vt?.hdr || "";
     const comptes = new Map();
-    for (const e of db?.entities ?? []) {
+    // R12 : espace objet seulement. db.entities mêle espace objet et espace papier ; on lit donc
+    // les entités du BLOCK_RECORD "*Model_Space" (même test de nom que libredwg-web : isModelSpace).
+    const modele = (db?.tables?.BLOCK_RECORD?.entries ?? []).filter((b) => String(b.name ?? "").toUpperCase() === "*MODEL_SPACE");
+    for (const e of modele.flatMap((b) => b.entities ?? [])) {
       if (!e.type || SOUS_ENTITES.has(e.type)) continue;
       comptes.set(e.type, (comptes.get(e.type) ?? 0) + 1);
     }

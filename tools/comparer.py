@@ -8,6 +8,33 @@ from pathlib import Path
 SOUS_ENTITES = {"ATTRIB", "SEQEND", "VERTEX"}
 REFERENCE = "reference"
 
+# R12 : une seule table de noms. Les types de référence sont ceux d'ezdxf (noms DXF) ; les CSV bruts
+# gardent les noms propres à chaque lecteur (acadrust : DIMENSION_LINEAR, EXTENDED_ENTITY, ?NOM ;
+# libredwg-web : POLYLINE2D, POLYLINE3D, ACAD_PROXY_ENTITY, ARCALIGNEDTEXT).
+PERSONNALISEE = "PERSONNALISEE"
+ALIAS_TYPES = {
+    "POLYLINE2D": "POLYLINE",
+    "POLYLINE3D": "POLYLINE",
+    "MINSERT": "INSERT",
+    "MLEADER": "MULTILEADER",
+}
+TYPES_STANDARD = {
+    "3DFACE", "3DSOLID", "ACAD_TABLE", "ARC", "ARC_DIMENSION", "ATTDEF", "BODY", "CIRCLE", "DIMENSION",
+    "ELLIPSE", "EXTRUDEDSURFACE", "HATCH", "HELIX", "IMAGE", "INSERT", "LARGE_RADIAL_DIMENSION",
+    "LEADER", "LIGHT", "LINE", "LOFTEDSURFACE", "LWPOLYLINE", "MESH", "MLINE", "MPOLYGON", "MTEXT",
+    "MULTILEADER", "OLE2FRAME", "PLANESURFACE", "POINT", "POLYLINE", "RAY", "REGION", "REVOLVEDSURFACE",
+    "SHAPE", "SOLID", "SPLINE", "SURFACE", "SWEPTSURFACE", "TEXT", "TOLERANCE", "TRACE", "VIEWPORT",
+    "WIPEOUT", "XLINE",
+}
+
+
+def normaliser_type(nom: str) -> str:
+    """Ramène un nom de type de lecteur au type DXF d'ezdxf ; hors types standard : PERSONNALISEE."""
+    if nom.startswith("DIMENSION_"):
+        return "DIMENSION"
+    nom = ALIAS_TYPES.get(nom, nom)
+    return nom if nom in TYPES_STANDARD else PERSONNALISEE
+
 
 def taux(ref: dict[str, int], lu: dict[str, int]) -> float | None:
     """Σ min(lu, ref) / Σ ref, hors sous-entités ; None si la référence est vide."""
@@ -89,8 +116,9 @@ def comparer(dossier_resultats: Path, sortie_md: Path) -> None:
             e["erreur"] = True
         elif l.get("duree_ms") not in (None, ""):
             e["duree"] = _flottant(l["duree_ms"])
-        if l.get("type"):
-            e["comptes"][l["type"]] = e["comptes"].get(l["type"], 0) + _entier(l["nombre"])
+        if l.get("type") and l["type"] not in SOUS_ENTITES:  # exclues avant le regroupement
+            t = normaliser_type(l["type"])
+            e["comptes"][t] = e["comptes"].get(t, 0) + _entier(l["nombre"])
 
     zips, id_zip, id_dwg, correspondance = attribuer_identifiants(refs)
     ordre = sorted(refs, key=lambda k: (id_zip[refs[k]["fichier"]], int(id_dwg[k].split("-")[1])))

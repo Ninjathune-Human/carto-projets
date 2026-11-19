@@ -21,6 +21,15 @@ test("libredwg compte la fixture", async () => {
   assert.equal(lignes[0].chemin, "a.dwg");
 });
 
+test("libredwg ne compte que l'espace objet (R12), pas l'espace papier", async () => {
+  const papier = readFileSync(new URL("../../../crates/cad/tests/fixtures/modele_et_papier.dwg", import.meta.url));
+  const lignes = await mesurerZip(zipAvec("p.dwg", papier), "t.zip");
+  assert.deepEqual(
+    lignes.filter((l) => l.type).map((l) => [l.type, l.nombre]).sort(),
+    [["CIRCLE", 1], ["LINE", 2]],
+  );
+});
+
 test("un DWG corrompu donne une ligne d'erreur sans lever", async () => {
   const lignes = await mesurerZip(zipAvec("sub\\Mauvais.DWG", Buffer.from("n'importe quoi")), "t.zip");
   assert.equal(lignes.length, 1);

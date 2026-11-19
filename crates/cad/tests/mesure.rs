@@ -17,6 +17,31 @@ fn compte_par_type_dans_l_espace_objet() {
     assert_eq!((m.total, m.inconnues), (3, 0));
 }
 
+/// Modèle : 2 LINE et 1 CIRCLE ; espace papier : 1 LINE et 1 CIRCLE (R12 : seul l'espace objet compte).
+fn dwg_avec_espace_papier() -> Vec<u8> {
+    let mut doc = CadDocument::new();
+    doc.add_entity(EntityType::Line(Line::from_coords(0., 0., 0., 10., 0., 0.))).unwrap();
+    doc.add_entity(EntityType::Line(Line::from_coords(0., 0., 0., 0., 10., 0.))).unwrap();
+    doc.add_entity(EntityType::Circle(Circle::from_coords(5., 5., 0., 2.))).unwrap();
+    doc.add_paper_space_entity(EntityType::Line(Line::from_coords(0., 0., 0., 1., 1., 0.))).unwrap();
+    doc.add_paper_space_entity(EntityType::Circle(Circle::from_coords(1., 1., 0., 1.))).unwrap();
+    DwgWriter::write_to_vec(&doc).unwrap()
+}
+
+#[test]
+fn l_espace_papier_n_est_pas_compte() {
+    let m = mesurer(&dwg_avec_espace_papier()).unwrap();
+    assert_eq!(m.par_type.get("LINE"), Some(&2));
+    assert_eq!(m.par_type.get("CIRCLE"), Some(&1));
+    assert_eq!(m.total, 3);
+}
+
+#[test]
+#[ignore]
+fn generer_fixture_espace_papier() {
+    std::fs::write("tests/fixtures/modele_et_papier.dwg", dwg_avec_espace_papier()).unwrap();
+}
+
 #[test]
 fn dwg_tronque_ne_panique_pas() {
     let o = dwg_de_test();

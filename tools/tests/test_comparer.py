@@ -64,3 +64,63 @@ def test_comparer_ignore_csv_sans_colonne_lecteur(tmp_path):
     comparer(tmp_path / "avec", tmp_path / "avec.md")
     assert (tmp_path / "avec.md").read_text(encoding="utf-8") == (tmp_path / "sans.md").read_text(encoding="utf-8")
     assert "80,0 %" in (tmp_path / "avec.md").read_text(encoding="utf-8")
+
+
+def test_normaliser_type_table_unique():
+    from comparer import normaliser_type
+    # acadrust
+    for brut in ("DIMENSION_LINEAR", "DIMENSION_ALIGNED", "DIMENSION_RADIUS", "DIMENSION_DIAMETER",
+                 "DIMENSION_ANGULAR_2LINE", "DIMENSION_ANGULAR_3POINT", "DIMENSION_ORDINATE", "DIMENSION"):
+        assert normaliser_type(brut) == "DIMENSION"
+    # libredwg-web
+    assert normaliser_type("POLYLINE2D") == "POLYLINE"
+    assert normaliser_type("POLYLINE3D") == "POLYLINE"
+    assert normaliser_type("POLYLINE") == "POLYLINE"
+    assert normaliser_type("MINSERT") == "INSERT"
+    # objets personnalisés, proxys et noms hors types standard
+    for brut in ("EXTENDED_ENTITY", "ACAD_PROXY_ENTITY", "?AEC_WALL", "UNKNOWN", "ARCALIGNEDTEXT", "AEC_WALL"):
+        assert normaliser_type(brut) == "PERSONNALISEE"
+    # types standard conservés
+    for brut in ("LINE", "CIRCLE", "LWPOLYLINE", "HATCH", "INSERT", "ACAD_TABLE", "MULTILEADER"):
+        assert normaliser_type(brut) == brut
+
+
+def test_comparer_ramene_les_noms_des_lecteurs_aux_types_ezdxf(tmp_path):
+    ecrire(tmp_path / "reference.csv", [
+        ["S.zip", "p.dwg", "reference", "AC1032", "", "DIMENSION", 4, ""],
+        ["S.zip", "p.dwg", "reference", "AC1032", "", "POLYLINE", 3, ""],
+        ["S.zip", "p.dwg", "reference", "AC1032", "", "ARCALIGNEDTEXT", 2, ""],
+        ["S.zip", "p.dwg", "reference", "AC1032", "", "LINE", 1, ""],
+    ])
+    ecrire(tmp_path / "acadrust.csv", [   # noms acadrust bruts
+        ["S.zip", "p.dwg", "acadrust", "x", 1, "DIMENSION_LINEAR", 3, ""],
+        ["S.zip", "p.dwg", "acadrust", "x", 1, "DIMENSION_RADIUS", 1, ""],
+        ["S.zip", "p.dwg", "acadrust", "x", 1, "POLYLINE", 3, ""],
+        ["S.zip", "p.dwg", "acadrust", "x", 1, "EXTENDED_ENTITY", 2, ""],
+        ["S.zip", "p.dwg", "acadrust", "x", 1, "LINE", 1, ""],
+    ])
+    ecrire(tmp_path / "libredwg.csv", [   # noms libredwg-web bruts
+        ["S.zip", "p.dwg", "libredwg", "x", 1, "DIMENSION", 4, ""],
+        ["S.zip", "p.dwg", "libredwg", "x", 1, "POLYLINE2D", 2, ""],
+        ["S.zip", "p.dwg", "libredwg", "x", 1, "POLYLINE3D", 1, ""],
+        ["S.zip", "p.dwg", "libredwg", "x", 1, "ACAD_PROXY_ENTITY", 2, ""],
+        ["S.zip", "p.dwg", "libredwg", "x", 1, "LINE", 1, ""],
+    ])
+    comparer(tmp_path, tmp_path / "s.md")
+    texte = (tmp_path / "s.md").read_text(encoding="utf-8")
+    ligne = {l.split("|")[1].strip(): [c.strip() for c in l.split("|")[2:-1]]
+             for l in texte.splitlines() if l.startswith("| acadrust") or l.startswith("| libredwg")}
+    assert ligne["acadrust"][0] == "100,0 %"
+    assert ligne["libredwg"][0] == "100,0 %"
+    # les CSV bruts gardent les noms propres à chaque lecteur
+    assert "DIMENSION_LINEAR" in (tmp_path / "acadrust.csv").read_text(encoding="utf-8")
+
+
+def test_comparer_exclut_les_sous_entites_avant_normalisation(tmp_path):
+    ecrire(tmp_path / "reference.csv", [
+        ["S.zip", "p.dwg", "reference", "AC1032", "", "LINE", 2, ""],
+        ["S.zip", "p.dwg", "reference", "AC1032", "", "ATTRIB", 5, ""],
+    ])
+    ecrire(tmp_path / "a.csv", [["S.zip", "p.dwg", "lecteurA", "x", 1, "LINE", 2, ""]])
+    comparer(tmp_path, tmp_path / "s.md")
+    assert "100,0 %" in (tmp_path / "s.md").read_text(encoding="utf-8")
