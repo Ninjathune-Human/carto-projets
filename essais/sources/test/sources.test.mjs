@@ -12,7 +12,9 @@ test("réponses", () => {
 
 test("réponses : jeton 498 et erreur réseau prioritaire", () => {
   assert.equal(classerReponse({ ok: true, status: 200, json: { error: { code: 498 } } }), "jeton requis");
-  assert.equal(classerReponse({ ok: true, status: 200, json: { error: { code: 400 } } }), "OK");
+  assert.equal(classerReponse({ ok: true, status: 200, json: { error: { code: 400 } } }), "erreur ArcGIS 400");
+  assert.equal(classerReponse({ ok: true, status: 200, json: { error: { code: 500, message: "x" } } }), "erreur ArcGIS 500");
+  assert.equal(classerReponse({ ok: true, status: 200, json: { extent: {} } }), "OK");
   assert.equal(classerReponse({ erreurReseau: true, ok: true, status: 200, json: {} }), "CORS ou réseau");
 });
 

@@ -4,6 +4,8 @@ export function classerReponse({ ok, status, json, erreurReseau } = {}) {
   if (erreurReseau) return "CORS ou réseau";
   const code = json && json.error && json.error.code;
   if (code === 498 || code === 499) return "jeton requis";
+  // ArcGIS REST sert ses erreurs (couche absente, opération non prise en charge...) en HTTP 200.
+  if (json && json.error) return "erreur ArcGIS " + (code ?? "inconnue");
   if (ok) return "OK";
   return "HTTP " + status;
 }
