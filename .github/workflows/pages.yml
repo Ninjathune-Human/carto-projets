@@ -33,6 +33,26 @@ jobs:
         run: cargo test --workspace
       - name: Tests wasm (Node)
         run: wasm-pack test --node crates/wasm
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Installer les dépendances de essais/libredwg
+        run: npm ci
+        working-directory: essais/libredwg
+      - name: Tests Node
+        run: >
+          node --test
+          'essais/banc/test/*.test.mjs'
+          'essais/carte/test/*.test.mjs'
+          'essais/sources/test/*.test.mjs'
+          'essais/libredwg/test/*.test.mjs'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Tests Python
+        run: |
+          pip install -r tools/requirements.txt
+          python3 -m pytest tools/tests
       - name: Construire le module wasm
         run: wasm-pack build crates/wasm --target web --release --out-dir ../../essais/banc/pkg
       - name: Assembler le site (_site)
