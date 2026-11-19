@@ -1,0 +1,6 @@
+corpus/
+target/
+node_modules/
+essais/**/pkg/
+.superpowers/
+__pycache__/
