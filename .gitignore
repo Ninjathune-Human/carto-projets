@@ -5,3 +5,4 @@ essais/**/pkg/
 .superpowers/
 __pycache__/
 _site/
+essais/carte/config.js

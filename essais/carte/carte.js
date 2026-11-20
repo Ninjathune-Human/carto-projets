@@ -10,6 +10,8 @@ const SDK = `https://js.arcgis.com/${VERSION_SDK}/`;
 
 const CHEMIN_CONTOUR = "../../data/limite_metropole.geojson";
 const CLE_STOCKEE = "cle-esri";
+// Clé écrite par le workflow à la publication (secret CLE_ESRI) ; config.js est absent en local.
+const CLE_PUBLIEE = await import("./config.js").then(m => String(m.CLE_ESRI || "").trim(), () => "");
 const SR = { wkid: 3857 };
 const NICE = [809111, 5418722];
 const DEMI_COTE_ESSAI = 10000;          // segments générés dans ±10 km autour de Nice
@@ -59,8 +61,13 @@ $("encoche").addEventListener("click", () => {
   $("corps").hidden = ouvert;
 });
 
-function lireCle() {
+function lireCleStockee() {
   try { return (localStorage.getItem(CLE_STOCKEE) || "").trim(); } catch { return ""; }
+}
+
+// Une clé saisie dans la page l'emporte sur la clé publiée.
+function lireCle() {
+  return lireCleStockee() || CLE_PUBLIEE;
 }
 
 function enregistrerCle() {
@@ -75,7 +82,8 @@ function enregistrerCle() {
   // La clé doit être connue du SDK avant sa première requête vers un service sécurisé.
   location.reload();
 }
-$("cle").value = lireCle();
+$("cle").value = lireCleStockee();
+if (CLE_PUBLIEE) $("cle").placeholder = "Clé publiée utilisée";
 $("enregistrer").addEventListener("click", enregistrerCle);
 $("cle").addEventListener("keydown", e => { if (e.key === "Enter") enregistrerCle(); });
 
