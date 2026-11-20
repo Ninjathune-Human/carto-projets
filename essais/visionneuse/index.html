@@ -23,6 +23,7 @@
   /* Vue : le plan seul, ou le plan et la capture côte à côte, ou la capture superposée au plan. */
   #vue {
     position: fixed; inset: 0; overflow: hidden; background: var(--plan);
+    touch-action: none; /* un pincement sur la capture ne zoome pas la page */
     -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
     display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr);
   }

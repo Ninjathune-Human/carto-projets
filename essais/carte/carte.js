@@ -381,6 +381,8 @@ async function demarrer() {
   }
 
   async function ouvrirLignes(f) {
+    // La liste des dessins maîtres d'un ZIP précédent réimporterait ce ZIP : on la masque.
+    $("maitres").hidden = true;
     message("plan", `Lecture de ${f.name}…`);
     try {
       definirPlan(lireLignes(await f.arrayBuffer()), f.name);
