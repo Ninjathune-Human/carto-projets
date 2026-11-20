@@ -2,6 +2,7 @@
 
 pub mod erreur;
 pub mod geometrie;
+pub mod hachures;
 pub mod inventaire;
 pub mod lignes;
 pub mod mesure;
