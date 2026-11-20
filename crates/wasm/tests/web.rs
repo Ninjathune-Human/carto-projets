@@ -77,3 +77,130 @@ mod wasm {
         assert!(casse.contains("\"erreur\""));
     }
 }
+
+// --- Import complet (ZIP -> SCN1 converti) ---
+
+#[cfg(not(target_arch = "wasm32"))]
+mod import {
+    use super::*;
+    use acadrust::{CadDocument, DwgWriter, EntityType, Line};
+
+    fn dwg(lignes: &[[f64; 4]]) -> Vec<u8> {
+        let mut doc = CadDocument::new();
+        doc.header.insertion_units = 6;
+        for l in lignes {
+            doc.add_entity(EntityType::Line(Line::from_coords(l[0], l[1], 0., l[2], l[3], 0.))).unwrap();
+        }
+        DwgWriter::write_to_vec(&doc).unwrap()
+    }
+
+    // Deux lignes à Nice, Lambert 93.
+    const NICE: [[f64; 4]; 2] = [[1_042_000., 6_298_000., 1_042_100., 6_298_050.], [1_042_100., 6_298_050., 1_042_150., 6_298_200.]];
+
+    fn zip_nice() -> Vec<u8> {
+        zip_de_test(&[("plan.dwg", &dwg(&NICE))])
+    }
+
+    fn u32_a(o: &[u8], i: usize) -> u32 {
+        u32::from_le_bytes(o[i..i + 4].try_into().unwrap())
+    }
+
+    /// Lit le SCN1 : (nombre de traits, premier point du premier trait, rapport JSON).
+    fn lire(scn: &[u8]) -> (usize, [f64; 2], serde_json::Value) {
+        assert_eq!(&scn[..4], b"SCN1");
+        let mut i = 4;
+        let nc = u32_a(scn, i) as usize;
+        i += 4;
+        for _ in 0..nc {
+            let n = u32_a(scn, i) as usize;
+            i += 4 + n + 4;
+        }
+        let np = u32_a(scn, i) as usize;
+        i += 4;
+        let mut premier = [0.; 2];
+        for k in 0..np {
+            assert_eq!(scn[i], 0, "trait attendu");
+            i += 1 + 4 + 4 + 4;
+            let n = u32_a(scn, i) as usize;
+            i += 4;
+            if k == 0 {
+                premier = [
+                    f64::from_le_bytes(scn[i..i + 8].try_into().unwrap()),
+                    f64::from_le_bytes(scn[i + 8..i + 16].try_into().unwrap()),
+                ];
+            }
+            i += 16 * n;
+        }
+        let nr = u32_a(scn, i) as usize;
+        i += 4;
+        (np, premier, serde_json::from_slice(&scn[i..i + nr]).unwrap())
+    }
+
+    #[test]
+    fn importe_un_plan_l93() {
+        let scn = importer_zip_scn(&zip_nice(), Repere::L93, None).unwrap();
+        let (n, p, rapport) = lire(&scn);
+        assert_eq!(n, 2);
+        assert!((p[0] - 1_042_000.).abs() < 1e-6 && (p[1] - 6_298_000.).abs() < 1e-6);
+        assert_eq!(rapport["systeme"], "Lambert 93");
+    }
+
+    #[test]
+    fn mercator_proche_de_l93_vers_mercator() {
+        let scn = importer_zip_scn(&zip_nice(), Repere::Mercator, None).unwrap();
+        let (_, p, _) = lire(&scn);
+        let (x, y) = carto_georef::l93_vers_mercator(1_042_000., 6_298_000.).unwrap();
+        assert!((p[0] - x).abs() < 1e-6 && (p[1] - y).abs() < 1e-6);
+    }
+
+    #[test]
+    fn objet_egare_importe() {
+        // Les percentiles 2 et 98 n'écartent un égaré qu'avec assez de points : 100 traits + 1 égaré.
+        let mut l: Vec<[f64; 4]> = (0..100).map(|i| [1_042_000. + i as f64, 6_298_000., 1_042_001. + i as f64, 6_298_010.]).collect();
+        l.push([0., 0., 0., 0.]);
+        let z = zip_de_test(&[("plan.dwg", &dwg(&l))]);
+        let scn = importer_zip_scn(&z, Repere::L93, None).unwrap();
+        let (n, _, rapport) = lire(&scn);
+        assert_eq!(n, 101);
+        assert_eq!(rapport["systeme"], "Lambert 93");
+    }
+
+    #[test]
+    fn non_georeference() {
+        let z = zip_de_test(&[("plan.dwg", &dwg(&[[0., 0., 10., 10.], [10., 10., 20., 5.]]))]);
+        let e = importer_zip_scn(&z, Repere::L93, None).unwrap_err();
+        let v: serde_json::Value = serde_json::from_str(&e).unwrap();
+        assert_eq!(v["code"], "non_georeference");
+        assert_eq!(
+            v["message"],
+            "Plan non géoréférencé : aucun système reconnu (Lambert 93, CC43, CC44, Lambert II étendu, Lambert III Sud ou carto)."
+        );
+    }
+
+    #[test]
+    fn plusieurs_maitres_json() {
+        let z = zip_de_test(&[("b.dwg", &dwg(&NICE)), ("a.dwg", &dwg(&NICE))]);
+        let e = importer_zip_scn(&z, Repere::L93, None).unwrap_err();
+        let v: serde_json::Value = serde_json::from_str(&e).unwrap();
+        assert_eq!(v["code"], "plusieurs_maitres");
+        assert_eq!(v["candidats"], serde_json::json!(["a.dwg", "b.dwg"]));
+    }
+
+    #[test]
+    fn aucun_dwg_et_maitre_inconnu() {
+        let z = zip_de_test(&[("x.txt", b"rien")]);
+        let v: serde_json::Value = serde_json::from_str(&importer_zip_scn(&z, Repere::L93, None).unwrap_err()).unwrap();
+        assert_eq!(v["code"], "aucun_dwg");
+        let v: serde_json::Value =
+            serde_json::from_str(&importer_zip_scn(&zip_nice(), Repere::L93, Some("zz.dwg")).unwrap_err()).unwrap();
+        assert_eq!(v["code"], "lecture");
+        assert_eq!(v["message"], "dessin maître inconnu : zz.dwg");
+    }
+
+    #[test]
+    fn repere_depuis_texte() {
+        assert!(matches!(Repere::depuis("l93"), Some(Repere::L93)));
+        assert!(matches!(Repere::depuis("mercator"), Some(Repere::Mercator)));
+        assert!(Repere::depuis("autre").is_none());
+    }
+}
