@@ -66,3 +66,18 @@ fn surface_a_triangles_qui_se_recouvrent() {
     // Dans le carré : 37,5 (premier, coupé à x = 0) + 40 (second) - 2075/72 (partie commune).
     assert!((aire(&s) - 3505. / 72.).abs() < 1e-9, "{}", aire(&s));
 }
+
+#[test]
+fn points_aberrants_ecartes() {
+    let z = carre(0., 0., 10.);
+    // Les segments qui touchent un point aberrant disparaissent, le reste est découpé normalement.
+    let mut m = z.couper_trait(&[[-5., 1.], [5., 1.], [1e200, 1.], [5., 3.], [15., 3.]]);
+    m.sort_by(|a, b| a[0][1].total_cmp(&b[0][1]));
+    assert_eq!(m.len(), 2, "{m:?}");
+    assert!(m[0].iter().all(|p| p[1] == 1.) && m[1].iter().all(|p| p[1] == 3.), "{m:?}");
+    // Les triangles qui touchent un point aberrant disparaissent.
+    let s = z.couper_surface(&[[0., 0.], [20., 0.], [0., 10.], [1., 1.], [1e200, 1.], [1., 2.]]);
+    assert!((aire(&s) - 75.).abs() < 1e-9, "{}", aire(&s));
+    // Contour aberrant : découpe sans effet.
+    assert!(Zone::nouvelle(&[[0., 0.], [1e200, 0.], [0., 1.]]).is_none());
+}

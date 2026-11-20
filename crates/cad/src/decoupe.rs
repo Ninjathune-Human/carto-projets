@@ -5,6 +5,7 @@
 use crate::geometrie::trianguler;
 use acadrust::entities::Insert;
 use acadrust::objects::ObjectType;
+use acadrust::types::Matrix4;
 use acadrust::{CadDocument, Handle, Vector3};
 use i_overlay::core::fill_rule::FillRule;
 use i_overlay::core::overlay_rule::OverlayRule;
@@ -15,6 +16,10 @@ use i_overlay::string::clip::ClipRule;
 /// Un trait posé sur le contour reste visible.
 const BORD_INCLUS: ClipRule = ClipRule { invert: false, boundary_included: true };
 
+/// Au-delà, une coordonnée est aberrante (aucun dessin réel n'en approche) : la découpe l'écarte,
+/// i_overlay refusant les coordonnées de plus de 2^500 en paniquant.
+const COORDONNEE_MAX: f64 = 1e15;
+
 /// Contour d'un XCLIP dans son propre repère : deux points sont les coins opposés d'un rectangle
 /// aux côtés parallèles aux axes de ce repère ; trois points ou plus, un polygone.
 pub fn contour_xclip(points: &[[f64; 2]]) -> Vec<[f64; 2]> {
@@ -24,10 +29,22 @@ pub fn contour_xclip(points: &[[f64; 2]]) -> Vec<[f64; 2]> {
     }
 }
 
+/// Inverse d'une transformation affine (partie linéaire 3 × 3 et translation) ; `None` si singulière.
+fn inverse_affine(m: &Matrix4) -> Option<Matrix4> {
+    let l = m.to_matrix3().inverse()?;
+    let t = l.transform_point(Vector3::new(m.m[0][3], m.m[1][3], m.m[2][3]));
+    let mut inv = Matrix4::from_matrix3(l);
+    for (k, v) in [-t.x, -t.y, -t.z].into_iter().enumerate() {
+        inv.m[k][3] = v;
+    }
+    Some(inv)
+}
+
 /// Contour XCLIP actif d'une insertion, dans le repère de définition du bloc : dictionnaire
-/// d'extension de l'INSERT → `ACAD_FILTER` → `SPATIAL` ; le contour passe par sa transformation
-/// propre puis par l'inverse de la transformation du bloc au moment de la découpe. Le sens inversé
-/// n'est pas lu par acadrust.
+/// d'extension de l'INSERT → `ACAD_FILTER` → `SPATIAL`. La matrice du contour porte les points vers
+/// le repère du contour : son inverse en ramène les sommets, puis l'inverse de la transformation du
+/// bloc au moment de la découpe les place dans le bloc (`IBT · CBT⁻¹ · p`). Le sens inversé n'est
+/// pas lu par acadrust.
 pub fn xclip_de(doc: &CadDocument, i: &Insert) -> Option<Vec<[f64; 2]>> {
     let entree = |dico: Handle, cle: &str| match doc.objects.get(&dico)? {
         ObjectType::Dictionary(d) => d.get(cle),
@@ -38,7 +55,7 @@ pub fn xclip_de(doc: &CadDocument, i: &Insert) -> Option<Vec<[f64; 2]>> {
     if !f.display_enabled || f.boundary_points.len() < 2 {
         return None;
     }
-    let m = f.inverse_block_transform * f.clip_bound_transform;
+    let m = f.inverse_block_transform * inverse_affine(&f.clip_bound_transform)?;
     let local: Vec<[f64; 2]> = f.boundary_points.iter().map(|p| [p.x, p.y]).collect();
     let bloc = contour_xclip(&local).into_iter().map(|p| m.transform_point(Vector3::new(p[0], p[1], 0.)));
     Some(bloc.map(|q| [q.x, q.y]).collect())
@@ -55,8 +72,9 @@ pub struct Zone {
     convexe: bool,
 }
 
+/// Coordonnées finies et non aberrantes (faux pour NaN et les infinis).
 fn fini(p: &[f64; 2]) -> bool {
-    p[0].is_finite() && p[1].is_finite()
+    p[0].abs() <= COORDONNEE_MAX && p[1].abs() <= COORDONNEE_MAX
 }
 
 fn emprise(points: impl Iterator<Item = [f64; 2]>) -> ([f64; 2], [f64; 2]) {
@@ -77,7 +95,7 @@ fn vectoriel(o: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
 
 impl Zone {
     /// Zone intérieure (pair-impair) d'un contour fermé implicitement ; `None` s'il n'enclôt
-    /// aucune aire ou n'est pas fini : la découpe est alors sans effet.
+    /// aucune aire ou a un sommet aberrant : la découpe est alors sans effet.
     pub fn nouvelle(contour: &[[f64; 2]]) -> Option<Zone> {
         if contour.len() < 3 || !contour.iter().all(fini) {
             return None;
@@ -142,8 +160,12 @@ impl Zone {
         })
     }
 
-    /// Parties visibles d'une polyligne (points finis).
+    /// Parties visibles d'une polyligne ; les segments qui touchent un point aberrant sont écartés.
     pub fn couper_trait(&self, points: &[[f64; 2]]) -> Vec<Vec<[f64; 2]>> {
+        if !points.iter().all(fini) {
+            let suites = points.split(|p| !fini(p)).filter(|s| s.len() >= 2);
+            return suites.flat_map(|s| self.couper_trait(s)).collect();
+        }
         let (min, max) = emprise(points.iter().copied());
         if self.est_vide() || !self.touche(min, max) {
             return Vec::new();
@@ -154,8 +176,14 @@ impl Zone {
         points.clip_by_as::<i64>(&self.contours, FillRule::EvenOdd, BORD_INCLUS)
     }
 
-    /// Partie visible d'une surface (triangles à plat, points finis), retriangulée.
+    /// Partie visible d'une surface (triangles à plat), retriangulée ; les triangles qui touchent
+    /// un point aberrant sont écartés.
     pub fn couper_surface(&self, triangles: &[[f64; 2]]) -> Vec<[f64; 2]> {
+        if !triangles.iter().all(fini) {
+            let sains: Vec<[f64; 2]> =
+                triangles.chunks_exact(3).filter(|t| t.iter().all(fini)).flatten().copied().collect();
+            return self.couper_surface(&sains);
+        }
         let (min, max) = emprise(triangles.iter().copied());
         if self.est_vide() || !self.touche(min, max) {
             return Vec::new();

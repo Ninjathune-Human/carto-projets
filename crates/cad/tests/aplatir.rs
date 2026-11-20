@@ -890,3 +890,34 @@ fn xclip_garde_le_trou_d_une_hachure() {
     assert_eq!(s.len(), 1);
     assert!((aire_triangles(s[0]) - 96.).abs() < 1e-6, "{}", aire_triangles(s[0]));
 }
+
+#[test]
+fn xclip_matrice_de_contour() {
+    // La matrice du contour porte les points vers le repère du contour : son inverse les en ramène.
+    let mut doc = CadDocument::new();
+    definir_bloc(&mut doc, "B", Vector3::ZERO, vec![ligne(-5., 5., 15., 5., "0")]);
+    let hi = inserer(&mut doc, Insert::new("B", Vector3::ZERO));
+    let mut f = filtre(&[(0., 0.), (10., 10.)]);
+    f.clip_bound_transform = Matrix4::translation(5., 0., 0.);
+    attacher_xclip(&mut doc, hi, f);
+    let r = aplatir_doc(doc);
+    let t = traits(&r);
+    assert_eq!(t.len(), 1, "{t:?}");
+    assert!(points_proches(t[0], &[[-5., 5.], [5., 5.]]), "{:?}", t[0]);
+}
+
+#[test]
+fn coordonnee_enorme_sans_panique() {
+    // DWG corrompu : un segment part à 1e200 dans un bloc découpé ; il est écarté, le reste importé.
+    let mut doc = CadDocument::new();
+    let p = LwPolyline::from_points(vec![Vector2::new(2., 2.), Vector2::new(4., 2.), Vector2::new(1e200, 2.)]);
+    let contenu = vec![ligne(5., 5., 1e200, 5., "0"), EntityType::LwPolyline(p), ligne(-5., 8., 15., 8., "0")];
+    definir_bloc(&mut doc, "B", Vector3::ZERO, contenu);
+    let hi = inserer(&mut doc, Insert::new("B", Vector3::ZERO));
+    attacher_xclip(&mut doc, hi, filtre(&[(0., 0.), (10., 10.)]));
+    let r = aplatir_doc(doc);
+    let t = traits(&r);
+    assert_eq!(t.len(), 2, "{t:?}");
+    assert!(points_proches(t[0], &[[2., 2.], [4., 2.]]), "{:?}", t[0]);
+    assert!(points_proches(t[1], &[[0., 8.], [10., 8.]]), "{:?}", t[1]);
+}
