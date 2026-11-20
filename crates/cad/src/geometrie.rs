@@ -161,9 +161,13 @@ pub fn spline_points(
         *d = u1;
     }
     let mut out: Vec<[f64; 2]> = ts.iter().map(|&t| de_boor(p, &u, controles, &w, t)).collect();
-    out[0] = controles[0];
-    if let Some(d) = out.last_mut() {
-        *d = controles[m - 1];
+    // Extrémités exactes seulement si les nœuds sont serrés (la courbe passe par les contrôles).
+    let serre = u[..=p].iter().all(|&x| x == u[0]) && u[m..].iter().all(|&x| x == u[m]);
+    if serre {
+        out[0] = controles[0];
+        if let Some(d) = out.last_mut() {
+            *d = controles[m - 1];
+        }
     }
     out
 }
@@ -288,10 +292,13 @@ pub fn bande(points: &[[f64; 2]], largeurs: &[(f64, f64)], fermee: bool) -> Vec<
 /// Triangulation pair-impair d'anneaux (trous compris) ; liste plate de sommets de triangles.
 pub fn trianguler(anneaux: &[Vec<[f64; 2]>]) -> Vec<[f64; 2]> {
     let mut min = [f64::INFINITY; 2];
+    let mut max = [f64::NEG_INFINITY; 2];
     for a in anneaux {
         for p in a.iter().filter(|p| p[0].is_finite() && p[1].is_finite()) {
             min[0] = min[0].min(p[0]);
             min[1] = min[1].min(p[1]);
+            max[0] = max[0].max(p[0]);
+            max[1] = max[1].max(p[1]);
         }
     }
     if !min[0].is_finite() {
@@ -300,6 +307,8 @@ pub fn trianguler(anneaux: &[Vec<[f64; 2]>]) -> Vec<[f64; 2]> {
     // lyon travaille en f32 : on se ramène près de l'origine pour garder la précision.
     let mut b = Path::builder();
     let mut vides = true;
+    // Sommets d'origine en f64, retrouvés par égalité exacte des f32 (pas de perte de précision).
+    let mut origine: std::collections::HashMap<(u32, u32), [f64; 2]> = std::collections::HashMap::new();
     for a in anneaux {
         let pts: Vec<_> = a
             .iter()
@@ -309,6 +318,10 @@ pub fn trianguler(anneaux: &[Vec<[f64; 2]>]) -> Vec<[f64; 2]> {
             continue;
         }
         vides = false;
+        for p in &pts {
+            let f = [(p[0] - min[0]) as f32, (p[1] - min[1]) as f32];
+            origine.insert((f[0].to_bits(), f[1].to_bits()), [p[0], p[1]]);
+        }
         b.begin(point((pts[0][0] - min[0]) as f32, (pts[0][1] - min[1]) as f32));
         for p in &pts[1..] {
             b.line_to(point((p[0] - min[0]) as f32, (p[1] - min[1]) as f32));
@@ -320,7 +333,9 @@ pub fn trianguler(anneaux: &[Vec<[f64; 2]>]) -> Vec<[f64; 2]> {
     }
     let chemin = b.build();
     let mut tampon: VertexBuffers<[f32; 2], u32> = VertexBuffers::new();
-    let options = FillOptions::default().with_fill_rule(FillRule::EvenOdd);
+    let options = FillOptions::default()
+        .with_fill_rule(FillRule::EvenOdd)
+        .with_tolerance((1e-6 * (max[0] - min[0]).max(max[1] - min[1]).max(1e-9)) as f32);
     let res = FillTessellator::new().tessellate_path(
         &chemin,
         &options,
@@ -334,7 +349,10 @@ pub fn trianguler(anneaux: &[Vec<[f64; 2]>]) -> Vec<[f64; 2]> {
         .iter()
         .map(|&i| {
             let v = tampon.vertices[i as usize];
-            [v[0] as f64 + min[0], v[1] as f64 + min[1]]
+            origine
+                .get(&(v[0].to_bits(), v[1].to_bits()))
+                .copied()
+                .unwrap_or([v[0] as f64 + min[0], v[1] as f64 + min[1]])
         })
         .collect()
 }

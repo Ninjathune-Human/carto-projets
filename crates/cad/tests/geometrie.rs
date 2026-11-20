@@ -95,3 +95,24 @@ fn degenere_sans_panique() {
     let _ = spline_points(3, &[], &[], None, 0.001);
     let _ = ellipse_points([0.0; 2], [0.0; 2], 0.5, 0.0, 1.0, 0.001);
 }
+
+#[test]
+fn ilot_proche_reste_vide() {
+    let ext = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
+    let trou = vec![[0.01, 0.01], [9.99, 0.01], [9.99, 9.99], [0.01, 9.99]];
+    let t = trianguler(&[ext, trou]);
+    assert_eq!(t.len() % 3, 0);
+    assert!((aire(&t) - (100.0 - 9.98 * 9.98)).abs() < 1e-6);
+    for c in t.chunks(3) {
+        let b = [(c[0][0] + c[1][0] + c[2][0]) / 3.0, (c[0][1] + c[1][1] + c[2][1]) / 3.0];
+        assert!(!(b[0] > 0.01 && b[0] < 9.99 && b[1] > 0.01 && b[1] < 9.99));
+    }
+}
+
+#[test]
+fn spline_non_serree() {
+    let c = [[0.0, 0.0], [1.0, 2.0], [2.0, 0.0]];
+    let p = spline_points(2, &[0.0, 1.0, 2.0, 3.0, 4.0, 5.0], &c, None, 0.001);
+    assert!(proche(p[0], [0.5, 1.0], 1e-9));
+    assert!(proche(*p.last().unwrap(), [1.5, 1.0], 1e-9));
+}
