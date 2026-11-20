@@ -13,7 +13,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  tests:
+    uses: ./.github/workflows/tests.yml
+    permissions:
+      contents: read
+
   deploy:
+    needs: tests
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -33,31 +39,9 @@ jobs:
           rustup target add wasm32-unknown-unknown
       - name: Installer wasm-pack
         run: cargo install wasm-pack --locked
-      - name: Tests natifs
-        run: cargo test --workspace
-      - name: Tests wasm (Node)
-        run: wasm-pack test --node crates/wasm
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-      - name: Installer les dépendances de essais/libredwg
-        run: npm ci
-        working-directory: essais/libredwg
-      - name: Tests Node
-        run: >
-          node --test
-          'essais/banc/test/*.test.mjs'
-          'essais/carte/test/*.test.mjs'
-          'essais/sources/test/*.test.mjs'
-          'essais/commun/test/*.test.mjs'
-          'essais/libredwg/test/*.test.mjs'
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
-      - name: Tests Python
-        run: |
-          pip install -r tools/requirements.txt
-          python3 -m pytest tools/tests
       - name: Construire le module wasm
         run: wasm-pack build crates/wasm --target web --release --out-dir ../../essais/banc/pkg
       - name: Assembler le site (_site)
@@ -68,7 +52,7 @@ jobs:
           cp index.html banniere.svg catalogue.json _site/
           if [ -d data ]; then cp -r data _site/data; fi
           cp -r essais/banc essais/carte essais/sources essais/visionneuse essais/commun _site/essais/
-          rm -rf _site/essais/carte/test _site/essais/sources/test _site/essais/commun/test _site/essais/visionneuse/test
+          rm -rf _site/essais/banc/test _site/essais/carte/test _site/essais/sources/test _site/essais/commun/test _site/essais/visionneuse/test
           python3 -c 'import json, os; print("export const CLE_ESRI = %s;" % json.dumps(os.environ.get("CLE_ESRI", "").strip()))' > _site/essais/carte/config.js
           du -sh _site
       - uses: actions/configure-pages@v6

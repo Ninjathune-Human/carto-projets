@@ -76,65 +76,126 @@ mod wasm {
         assert!(casse.contains("\"chemin\":\"b.dwg\",\"duree_ms\":"));
         assert!(casse.contains("\"erreur\""));
     }
+
+    /// Import complet compilé en wasm32 : carto-georef, proj4rs, lyon, i_overlay.
+    #[wasm_bindgen_test]
+    fn importe_un_plan_l93_en_memoire() {
+        verifier_import_l93(&importer_zip(&zip_nice(), "l93", None).unwrap());
+    }
+
+    /// La grille NTF → RGF93 (proj4rs, `tiff`) chargée depuis les octets en wasm.
+    #[wasm_bindgen_test]
+    fn importe_un_plan_lambert_ii_etendu_par_la_grille() {
+        verifier_import_l2e(&importer_zip(&zip_l2e(), "l93", None).unwrap());
+    }
 }
 
 // --- Import complet (ZIP -> SCN1 converti) ---
 
+/// DWG en mémoire (mètres) fait de lignes `[x1, y1, x2, y2]`.
+fn dwg(lignes: &[[f64; 4]]) -> Vec<u8> {
+    use acadrust::{CadDocument, DwgWriter, EntityType, Line};
+    let mut doc = CadDocument::new();
+    doc.header.insertion_units = 6;
+    for l in lignes {
+        doc.add_entity(EntityType::Line(Line::from_coords(l[0], l[1], 0., l[2], l[3], 0.))).unwrap();
+    }
+    DwgWriter::write_to_vec(&doc).unwrap()
+}
+
+// Deux lignes à Nice, Lambert 93.
+const NICE: [[f64; 4]; 2] = [[1_042_000., 6_298_000., 1_042_100., 6_298_050.], [1_042_100., 6_298_050., 1_042_150., 6_298_200.]];
+
+fn zip_nice() -> Vec<u8> {
+    zip_de_test(&[("plan.dwg", &dwg(&NICE))])
+}
+
+fn u32_a(o: &[u8], i: usize) -> u32 {
+    u32::from_le_bytes(o[i..i + 4].try_into().unwrap())
+}
+
+/// Lit le SCN1 : (nombre de traits, premier point du premier trait, rapport JSON).
+fn lire(scn: &[u8]) -> (usize, [f64; 2], serde_json::Value) {
+    assert_eq!(&scn[..4], b"SCN1");
+    let mut i = 4;
+    let nc = u32_a(scn, i) as usize;
+    i += 4;
+    for _ in 0..nc {
+        let n = u32_a(scn, i) as usize;
+        i += 4 + n + 4;
+    }
+    let np = u32_a(scn, i) as usize;
+    i += 4;
+    let mut premier = [0.; 2];
+    for k in 0..np {
+        assert_eq!(scn[i], 0, "trait attendu");
+        i += 1 + 4 + 4 + 4;
+        let n = u32_a(scn, i) as usize;
+        i += 4;
+        if k == 0 {
+            premier = [
+                f64::from_le_bytes(scn[i..i + 8].try_into().unwrap()),
+                f64::from_le_bytes(scn[i + 8..i + 16].try_into().unwrap()),
+            ];
+        }
+        i += 16 * n;
+    }
+    let nr = u32_a(scn, i) as usize;
+    i += 4;
+    (np, premier, serde_json::from_slice(&scn[i..i + nr]).unwrap())
+}
+
+// Corps des essais de l'import compilé en wasm (R15), lancés aussi en natif par la même API
+// `importer_zip` (son chemin de succès ne touche aucune valeur JavaScript).
+
+/// Plan Lambert 93 en mémoire : système reconnu, facteur 1, points inchangés.
+fn verifier_import_l93(scn: &[u8]) {
+    let (n, p, rapport) = lire(scn);
+    assert_eq!(n, 2);
+    assert!((p[0] - 1_042_000.).abs() < 1e-6 && (p[1] - 6_298_000.).abs() < 1e-6, "{p:?}");
+    assert_eq!(rapport["systeme"], "Lambert 93");
+    assert_eq!(rapport["facteur"], serde_json::json!(1.0));
+}
+
+/// Premier point Lambert II étendu de la référence pyproj (grille NTF → RGF93) et son image en Lambert 93.
+fn reference_l2e() -> ([f64; 2], [f64; 2]) {
+    let csv = include_str!("../../georef/tests/fixtures/conversions.csv");
+    let l = csv.lines().find(|l| l.starts_with("Lambert II étendu,")).expect("ligne Lambert II étendu");
+    let v: Vec<f64> = l.split(',').skip(1).map(|c| c.parse().unwrap()).collect();
+    ([v[0], v[1]], [v[2], v[3]])
+}
+
+/// ZIP d'un plan Lambert II étendu : une ligne qui part du point de référence.
+fn zip_l2e() -> Vec<u8> {
+    let ([x, y], _) = reference_l2e();
+    zip_de_test(&[("plan.dwg", &dwg(&[[x, y, x + 100., y + 50.]]))])
+}
+
+/// Plan Lambert II étendu : reconnu, et converti par la grille à moins de 1 mm de la référence.
+fn verifier_import_l2e(scn: &[u8]) {
+    let (_, l93) = reference_l2e();
+    let (n, p, rapport) = lire(scn);
+    assert_eq!(n, 1);
+    assert_eq!(rapport["systeme"], "Lambert II étendu");
+    assert!((p[0] - l93[0]).abs() < 1e-3 && (p[1] - l93[1]).abs() < 1e-3, "{p:?} au lieu de {l93:?}");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn import_par_l_api_wasm_l93() {
+    verifier_import_l93(&importer_zip(&zip_nice(), "l93", None).unwrap());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn import_par_l_api_wasm_l2e() {
+    verifier_import_l2e(&importer_zip(&zip_l2e(), "l93", None).unwrap());
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 mod import {
     use super::*;
-    use acadrust::{CadDocument, Circle, DwgWriter, EntityType, Line};
-
-    fn dwg(lignes: &[[f64; 4]]) -> Vec<u8> {
-        let mut doc = CadDocument::new();
-        doc.header.insertion_units = 6;
-        for l in lignes {
-            doc.add_entity(EntityType::Line(Line::from_coords(l[0], l[1], 0., l[2], l[3], 0.))).unwrap();
-        }
-        DwgWriter::write_to_vec(&doc).unwrap()
-    }
-
-    // Deux lignes à Nice, Lambert 93.
-    const NICE: [[f64; 4]; 2] = [[1_042_000., 6_298_000., 1_042_100., 6_298_050.], [1_042_100., 6_298_050., 1_042_150., 6_298_200.]];
-
-    fn zip_nice() -> Vec<u8> {
-        zip_de_test(&[("plan.dwg", &dwg(&NICE))])
-    }
-
-    fn u32_a(o: &[u8], i: usize) -> u32 {
-        u32::from_le_bytes(o[i..i + 4].try_into().unwrap())
-    }
-
-    /// Lit le SCN1 : (nombre de traits, premier point du premier trait, rapport JSON).
-    fn lire(scn: &[u8]) -> (usize, [f64; 2], serde_json::Value) {
-        assert_eq!(&scn[..4], b"SCN1");
-        let mut i = 4;
-        let nc = u32_a(scn, i) as usize;
-        i += 4;
-        for _ in 0..nc {
-            let n = u32_a(scn, i) as usize;
-            i += 4 + n + 4;
-        }
-        let np = u32_a(scn, i) as usize;
-        i += 4;
-        let mut premier = [0.; 2];
-        for k in 0..np {
-            assert_eq!(scn[i], 0, "trait attendu");
-            i += 1 + 4 + 4 + 4;
-            let n = u32_a(scn, i) as usize;
-            i += 4;
-            if k == 0 {
-                premier = [
-                    f64::from_le_bytes(scn[i..i + 8].try_into().unwrap()),
-                    f64::from_le_bytes(scn[i + 8..i + 16].try_into().unwrap()),
-                ];
-            }
-            i += 16 * n;
-        }
-        let nr = u32_a(scn, i) as usize;
-        i += 4;
-        (np, premier, serde_json::from_slice(&scn[i..i + nr]).unwrap())
-    }
+    use acadrust::{CadDocument, Circle, DwgWriter, EntityType};
 
     #[test]
     fn importe_un_plan_l93() {
