@@ -2,7 +2,7 @@
 //! (un piège wasm ne coûte ainsi que le DWG en cours, voir R15).
 
 use carto_cad::{ecrire_scene, importer_zip as importer_zip_cad, inventorier, lire_entree, mesurer, ErreurCad, Mesure, Primitive};
-use carto_georef::{emprise_essentielle, reconnaitre, Convertisseur};
+use carto_georef::{reconnaitre_points, Convertisseur};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 use web_time::Instant;
@@ -100,8 +100,7 @@ pub fn importer_zip_scn(octets: &[u8], repere: Repere, maitre: Option<&str>) -> 
         e => lecture(e),
     })?;
     let points: Vec<[f64; 2]> = a.scene.points_mut().map(|p| *p).collect();
-    let reco = emprise_essentielle(&points)
-        .and_then(reconnaitre)
+    let (reco, _emprise) = reconnaitre_points(&points)
         .ok_or_else(|| erreur_json("non_georeference", MESSAGE_NON_GEOREFERENCE))?;
     let facteur = reco.facteur;
     let conv = Convertisseur::nouveau(reco).map_err(lecture)?;

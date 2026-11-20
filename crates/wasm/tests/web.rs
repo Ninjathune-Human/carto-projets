@@ -155,13 +155,12 @@ mod import {
 
     #[test]
     fn objet_egare_importe() {
-        // Les percentiles 2 et 98 n'écartent un égaré qu'avec assez de points : 100 traits + 1 égaré.
-        let mut l: Vec<[f64; 4]> = (0..100).map(|i| [1_042_000. + i as f64, 6_298_000., 1_042_001. + i as f64, 6_298_010.]).collect();
+        let mut l = NICE.to_vec();
         l.push([0., 0., 0., 0.]);
         let z = zip_de_test(&[("plan.dwg", &dwg(&l))]);
         let scn = importer_zip_scn(&z, Repere::L93, None).unwrap();
         let (n, _, rapport) = lire(&scn);
-        assert_eq!(n, 101);
+        assert_eq!(n, 3);
         assert_eq!(rapport["systeme"], "Lambert 93");
     }
 

@@ -2,7 +2,7 @@
 
 mod systemes;
 
-pub use systemes::{emprise_essentielle, reconnaitre, Convertisseur, Reconnaissance, Systeme};
+pub use systemes::{emprise_essentielle, reconnaitre, reconnaitre_points, Convertisseur, Reconnaissance, Systeme};
 
 use proj4rs::proj::Proj;
 use proj4rs::transform::transform;

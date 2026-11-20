@@ -1,4 +1,4 @@
-use carto_georef::{emprise_essentielle, l93_vers_mercator, reconnaitre, Convertisseur, Reconnaissance, Systeme};
+use carto_georef::{emprise_essentielle, reconnaitre_points, l93_vers_mercator, reconnaitre, Convertisseur, Reconnaissance, Systeme};
 
 const CSV: &str = include_str!("fixtures/conversions.csv");
 
@@ -124,4 +124,24 @@ fn performance() {
     let d = t.elapsed();
     assert!(somme.is_finite());
     assert!(d.as_secs_f64() < 2.0, "100 000 conversions en {d:?}");
+}
+
+fn grille(n: usize, x0: f64, y0: f64, pas: f64) -> Vec<[f64; 2]> {
+    (0..n).map(|i| [x0 + (i % 30) as f64 * pas, y0 + (i / 30) as f64 * pas]).collect()
+}
+
+#[test]
+fn majorite_avec_cartouche_a_l_origine() {
+    let mut pts = grille(900, 1_040_000., 6_297_000., 10.);
+    pts.extend(grille(100, 0., 0., 1.));
+    let (r, e) = reconnaitre_points(&pts).unwrap();
+    assert_eq!(r, Reconnaissance { systeme: Systeme::Lambert93, facteur: 1.0 });
+    assert!(e[0] >= 1_040_000. && e[2] <= 1_040_300. && e[1] >= 6_297_000. && e[3] <= 6_297_300.);
+}
+
+#[test]
+fn minorite_refusee() {
+    let mut pts = grille(400, 1_040_000., 6_297_000., 10.);
+    pts.extend(grille(600, 0., 0., 1.));
+    assert!(reconnaitre_points(&pts).is_none());
 }

@@ -163,6 +163,39 @@ pub fn reconnaitre(emprise: [f64; 4]) -> Option<Reconnaissance> {
     None
 }
 
+/// Reconnaissance à la majorité : le couple (système, facteur) dont le rectangle de la Métropole
+/// contient le plus de points finis (premier dans l'ordre des essais en cas d'égalité), s'il en
+/// contient au moins la moitié. Renvoie aussi l'emprise essentielle des seuls points contenus
+/// (unités du dessin). Les objets égarés (cartouche, cotes d'altitude) ne comptent pas.
+pub fn reconnaitre_points(points: &[[f64; 2]]) -> Option<(Reconnaissance, [f64; 4])> {
+    let finis: Vec<[f64; 2]> = points.iter().copied().filter(|p| p[0].is_finite() && p[1].is_finite()).collect();
+    if finis.is_empty() {
+        return None;
+    }
+    let rects = rectangles();
+    let dedans = |r: &[f64; 4], f: f64, p: &[f64; 2]| {
+        let (x, y) = (p[0] * f, p[1] * f);
+        x >= r[0] && y >= r[1] && x <= r[2] && y <= r[3]
+    };
+    let mut meilleur: Option<(Reconnaissance, usize)> = None;
+    for systeme in Systeme::TOUS {
+        let r = &rects[systeme.indice()];
+        for facteur in FACTEURS {
+            let n = finis.iter().filter(|p| dedans(r, facteur, p)).count();
+            if n > meilleur.map_or(0, |(_, m)| m) {
+                meilleur = Some((Reconnaissance { systeme, facteur }, n));
+            }
+        }
+    }
+    let (reco, n) = meilleur?;
+    if n * 2 < finis.len() {
+        return None;
+    }
+    let r = &rects[reco.systeme.indice()];
+    let contenus: Vec<[f64; 2]> = finis.into_iter().filter(|p| dedans(r, reco.facteur, p)).collect();
+    Some((reco, emprise_essentielle(&contenus)?))
+}
+
 /// Convertisseur d'un système vers Lambert 93 et Web Mercator ; projections analysées une fois.
 pub struct Convertisseur {
     source: Proj,
