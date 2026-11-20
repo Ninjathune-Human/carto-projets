@@ -83,7 +83,7 @@ mod wasm {
 #[cfg(not(target_arch = "wasm32"))]
 mod import {
     use super::*;
-    use acadrust::{CadDocument, DwgWriter, EntityType, Line};
+    use acadrust::{CadDocument, Circle, DwgWriter, EntityType, Line};
 
     fn dwg(lignes: &[[f64; 4]]) -> Vec<u8> {
         let mut doc = CadDocument::new();
@@ -190,6 +190,74 @@ mod import {
         let z = zip_de_test(&[("plan.dwg", &dwg(&l))]);
         let (_, _, rapport) = lire(&importer_zip_scn(&z, Repere::L93, None).unwrap());
         assert!(avertissements(&rapport).iter().all(|a| !a.starts_with("Une partie du dessin")), "{rapport}");
+    }
+
+    /// Un cercle seul, INSUNITS donné.
+    fn dwg_cercle(insunits: i16, centre: [f64; 2], rayon: f64) -> Vec<u8> {
+        let mut doc = CadDocument::new();
+        doc.header.insertion_units = insunits;
+        doc.add_entity(EntityType::Circle(Circle::from_coords(centre[0], centre[1], 0., rayon))).unwrap();
+        DwgWriter::write_to_vec(&doc).unwrap()
+    }
+
+    /// Genre (0 trait, 1 surface) et nombre de points de chaque primitive du SCN1, puis le rapport.
+    fn tailles(scn: &[u8]) -> (Vec<(u8, usize)>, serde_json::Value) {
+        let mut i = 4;
+        let nc = u32_a(scn, i) as usize;
+        i += 4;
+        for _ in 0..nc {
+            let n = u32_a(scn, i) as usize;
+            i += 4 + n + 4;
+        }
+        let np = u32_a(scn, i) as usize;
+        i += 4;
+        let mut v = Vec::new();
+        for _ in 0..np {
+            let genre = scn[i];
+            i += 1 + 4 + 4 + 4;
+            let n = u32_a(scn, i) as usize;
+            i += 4 + 16 * n;
+            v.push((genre, n));
+        }
+        let nr = u32_a(scn, i) as usize;
+        i += 4;
+        (v, serde_json::from_slice(&scn[i..i + nr]).unwrap())
+    }
+
+    const RECALCUL: &str = "Unités du dessin (INSUNITS) différentes des unités reconnues : tolérance de corde recalculée.";
+
+    #[test]
+    fn plan_en_metres_declare_en_mm_tolerance_recalculee() {
+        // INSUNITS 4 (mm) donnerait une corde de 1 m : un cercle de 5 m deviendrait un pentagone (6 points).
+        let z = zip_de_test(&[("plan.dwg", &dwg_cercle(4, [1_042_000., 6_298_000.], 5.))]);
+        let (p, rapport) = tailles(&importer_zip_scn(&z, Repere::L93, None).unwrap());
+        assert_eq!(rapport["systeme"], "Lambert 93");
+        assert_eq!(rapport["facteur"], serde_json::json!(1.0));
+        assert_eq!(p.len(), 1);
+        // Corde de 1 mm réel sur un rayon de 5 m : 158 segments.
+        assert!(p[0].1 > 6, "{p:?}");
+        assert_eq!(p[0].1, 159, "{p:?}");
+        assert!(avertissements(&rapport).contains(&RECALCUL.to_string()), "{rapport}");
+    }
+
+    #[test]
+    fn plan_en_mm_declare_en_metres_tolerance_bornee() {
+        // INSUNITS 6 (m) donnerait une corde de 1 µm réel : 4096 segments par cercle.
+        let z = zip_de_test(&[("plan.dwg", &dwg_cercle(6, [1_042_000_000., 6_298_000_000.], 5000.))]);
+        let (p, rapport) = tailles(&importer_zip_scn(&z, Repere::L93, None).unwrap());
+        assert_eq!(rapport["facteur"], serde_json::json!(0.001));
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].1, 159, "{p:?}");
+        assert!(avertissements(&rapport).contains(&RECALCUL.to_string()), "{rapport}");
+    }
+
+    #[test]
+    fn unites_concordantes_sans_recalcul() {
+        let z = zip_de_test(&[("plan.dwg", &dwg_cercle(6, [1_042_000., 6_298_000.], 5.))]);
+        let (p, rapport) = tailles(&importer_zip_scn(&z, Repere::L93, None).unwrap());
+        assert_eq!(rapport["facteur"], serde_json::json!(1.0));
+        assert_eq!(p[0].1, 159, "{p:?}");
+        assert!(!avertissements(&rapport).contains(&RECALCUL.to_string()), "{rapport}");
     }
 
     #[test]

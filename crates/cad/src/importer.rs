@@ -156,19 +156,18 @@ pub fn trouver_maitres(dessins: &Dessins) -> Vec<String> {
     dessins.docs.keys().filter(|c| !references.contains(*c)).cloned().collect()
 }
 
-/// Importe un ZIP eTransmit : `maitre` désigne le dessin à ouvrir ; sans lui, le seul dessin
-/// maître possible (si tous se référencent en boucle, tous le sont), sinon `PlusieursMaitres`.
-pub fn importer_zip(zip: &[u8], maitre: Option<&str>) -> Result<Aplatissement, ErreurCad> {
-    let dessins = charger_dessins(zip)?;
+/// Dessin à ouvrir : `maitre` s'il est donné ; sans lui, le seul dessin maître possible (si tous
+/// se référencent en boucle, tous le sont), sinon `PlusieursMaitres` ; `AucunDwg` sans dessin.
+pub fn choisir_maitre(dessins: &Dessins, maitre: Option<&str>) -> Result<String, ErreurCad> {
     if dessins.docs.is_empty() && dessins.illisibles.is_empty() {
         return Err(ErreurCad::AucunDwg);
     }
-    let maitre = match maitre {
+    Ok(match maitre {
         Some(m) => m.to_string(),
         // Aucun dessin lisible : l'aplatissement du premier en donne la cause.
         None if dessins.docs.is_empty() => dessins.illisibles.keys().next().cloned().unwrap_or_default(),
         None => {
-            let mut candidats = trouver_maitres(&dessins);
+            let mut candidats = trouver_maitres(dessins);
             if candidats.is_empty() {
                 candidats = dessins.docs.keys().cloned().collect();
             }
@@ -177,6 +176,12 @@ pub fn importer_zip(zip: &[u8], maitre: Option<&str>) -> Result<Aplatissement, E
             }
             candidats.remove(0)
         }
-    };
+    })
+}
+
+/// Importe un ZIP eTransmit : lecture des dessins, choix du maître ([`choisir_maitre`]), aplatissement.
+pub fn importer_zip(zip: &[u8], maitre: Option<&str>) -> Result<Aplatissement, ErreurCad> {
+    let dessins = charger_dessins(zip)?;
+    let maitre = choisir_maitre(&dessins, maitre)?;
     aplatir(&dessins, &maitre)
 }

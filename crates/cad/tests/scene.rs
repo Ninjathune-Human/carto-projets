@@ -38,6 +38,17 @@ fn emprise_du_rapport_en_tableau() {
 }
 
 #[test]
+fn facteur_du_rapport_nombre_ou_null() {
+    let o = ecrire_scene(&Scene::default(), &Rapport::default());
+    let json: serde_json::Value = serde_json::from_slice(&o[16..]).unwrap();
+    assert_eq!(json.get("facteur"), Some(&serde_json::Value::Null), "facteur inconnu : null");
+    let r = Rapport { facteur: Some(0.01), ..rapport() };
+    let o = ecrire_scene(&Scene::default(), &r);
+    let json: serde_json::Value = serde_json::from_slice(&o[16..]).unwrap();
+    assert_eq!(json["facteur"], serde_json::json!(0.01));
+}
+
+#[test]
 fn trait_et_surface_serialises() {
     let o = ecrire_scene(&scene_deux(), &rapport());
     // 4 signature + 4 calques + (4 + 1 nom + 4 couleur) + 4 primitives

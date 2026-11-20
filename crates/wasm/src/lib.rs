@@ -1,8 +1,12 @@
 //! Crate wasm de carto-projets : mesure des DWG d'un ZIP eTransmit dans le navigateur, un DWG par appel
 //! (un piège wasm ne coûte ainsi que le DWG en cours, voir R15).
 
-use carto_cad::{ecrire_scene, importer_zip as importer_zip_cad, inventorier, lire_entree, mesurer, ErreurCad, Mesure, Primitive};
-use carto_georef::{reconnaitre_primitives, Convertisseur};
+use carto_cad::proprietes::metres_par_unite;
+use carto_cad::{
+    aplatir, aplatir_avec_tolerance, charger_dessins, choisir_maitre, ecrire_scene, inventorier, lire_entree, mesurer, ErreurCad,
+    Mesure, Primitive, Scene,
+};
+use carto_georef::{reconnaitre_primitives, Convertisseur, Reconnaissance};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 use web_time::Instant;
@@ -82,6 +86,22 @@ impl Repere {
 const MESSAGE_NON_GEOREFERENCE: &str =
     "Plan non géoréférencé : aucun système reconnu (Lambert 93, CC43, CC44, Lambert II étendu, Lambert III Sud ou carto).";
 
+const MESSAGE_RECALCUL: &str =
+    "Unités du dessin (INSUNITS) différentes des unités reconnues : tolérance de corde recalculée.";
+
+/// Reconnaissance du système par vote des primitives de la scène (unités du dessin).
+fn reconnaitre_scene(scene: &Scene) -> Option<(Reconnaissance, [f64; 4], f64)> {
+    let groupes: Vec<&[[f64; 2]]> = scene
+        .primitives
+        .iter()
+        .map(|p| match p {
+            Primitive::Trait { points, .. } => points.as_slice(),
+            Primitive::Surface { triangles, .. } => triangles.as_slice(),
+        })
+        .collect();
+    reconnaitre_primitives(&groupes)
+}
+
 fn erreur_json(code: &str, message: &str) -> String {
     serde_json::json!({ "code": code, "message": message }).to_string()
 }
@@ -91,26 +111,33 @@ fn lecture(message: impl std::fmt::Display) -> String {
 }
 
 /// Importe un ZIP eTransmit : aplatissement, reconnaissance du système par vote des primitives
-/// (au moins 10 % ; un avertissement sous la moitié), conversion de chaque point (dans le repère
-/// demandé) puis écriture SCN1.
+/// (au moins 10 % ; un avertissement sous la moitié), nouvel aplatissement à 1 mm réel si les
+/// unités reconnues contredisent INSUNITS, conversion de chaque point (dans le repère demandé)
+/// puis écriture SCN1.
 /// L'erreur est une chaîne JSON `{"code", …}`.
 pub fn importer_zip_scn(octets: &[u8], repere: Repere, maitre: Option<&str>) -> Result<Vec<u8>, String> {
-    let mut a = importer_zip_cad(octets, maitre).map_err(|e| match e {
+    let erreur_cad = |e: ErreurCad| match e {
         ErreurCad::AucunDwg => serde_json::json!({ "code": "aucun_dwg" }).to_string(),
         ErreurCad::PlusieursMaitres(c) => serde_json::json!({ "code": "plusieurs_maitres", "candidats": c }).to_string(),
         e => lecture(e),
-    })?;
-    let groupes: Vec<&[[f64; 2]]> = a
-        .scene
-        .primitives
-        .iter()
-        .map(|p| match p {
-            Primitive::Trait { points, .. } => points.as_slice(),
-            Primitive::Surface { triangles, .. } => triangles.as_slice(),
-        })
-        .collect();
-    let (reco, emprise, part) = reconnaitre_primitives(&groupes)
-        .ok_or_else(|| erreur_json("non_georeference", MESSAGE_NON_GEOREFERENCE))?;
+    };
+    let dessins = charger_dessins(octets).map_err(erreur_cad)?;
+    let maitre = choisir_maitre(&dessins, maitre).map_err(erreur_cad)?;
+    let mut a = aplatir(&dessins, &maitre).map_err(erreur_cad)?;
+    let (reco, mut emprise, mut part) =
+        reconnaitre_scene(&a.scene).ok_or_else(|| erreur_json("non_georeference", MESSAGE_NON_GEOREFERENCE))?;
+    // La tolérance de corde vient d'INSUNITS : si les unités reconnues le contredisent (gabarit en mm
+    // pour un plan en m, par exemple), le maître est aplati de nouveau à 1 mm réel, sans relire les DWG.
+    let declare = dessins.docs.get(&maitre).map_or(1.0, |d| metres_par_unite(d.header.insertion_units));
+    if (reco.facteur - declare).abs() > 1e-9 * reco.facteur.max(declare) {
+        a = aplatir_avec_tolerance(&dessins, &maitre, Some(0.001 / reco.facteur)).map_err(erreur_cad)?;
+        // Les voix ne changent pas avec la discrétisation ; l'emprise essentielle, si.
+        if let Some((_, e, p)) = reconnaitre_scene(&a.scene).filter(|(r, _, _)| *r == reco) {
+            (emprise, part) = (e, p);
+        }
+        a.rapport.avertissements.push(MESSAGE_RECALCUL.to_string());
+    }
+    a.rapport.facteur = Some(reco.facteur);
     if part < 0.5 {
         let hors = ((1.0 - part) * 100.0).round() as u32;
         a.rapport.avertissements.push(format!("Une partie du dessin ({hors} %) est hors de l'emprise du système reconnu."));

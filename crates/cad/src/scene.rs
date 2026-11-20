@@ -32,6 +32,9 @@ pub struct Rapport {
     pub ignorees: BTreeMap<String, u64>,
     pub avertissements: Vec<String>,
     pub systeme: Option<String>,
+    /// Facteur unités du dessin vers mètres reconnu avec le système (1, 0.01 ou 0.001) ; `null` en
+    /// JSON s'il n'est pas connu.
+    pub facteur: Option<f64>,
     /// Emprise essentielle `[xmin, ymin, xmax, ymax]` dans le repère de la scène (objets égarés
     /// écartés), pour cadrer la vue ; `null` en JSON si elle n'est pas connue.
     pub emprise: Option<[f64; 4]>,

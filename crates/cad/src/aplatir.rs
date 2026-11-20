@@ -51,7 +51,14 @@ pub struct Aplatissement {
 }
 
 /// Aplatit l'espace objet du dessin `maitre`, xréfs comprises ; les dessins illisibles sont signalés.
+/// Tolérance de corde : 1 mm réel d'après l'INSUNITS du maître.
 pub fn aplatir(dessins: &Dessins, maitre: &str) -> Result<Aplatissement, ErreurCad> {
+    aplatir_avec_tolerance(dessins, maitre, None)
+}
+
+/// Comme [`aplatir`], avec une tolérance de corde imposée en unités du dessin maître (`None` :
+/// 1 mm réel d'après INSUNITS), quand les unités reconnues contredisent INSUNITS.
+pub fn aplatir_avec_tolerance(dessins: &Dessins, maitre: &str, tolerance: Option<f64>) -> Result<Aplatissement, ErreurCad> {
     if let Some(cause) = dessins.illisibles.get(maitre) {
         return Err(ErreurCad::Dwg(format!("{maitre} : {cause}")));
     }
@@ -62,7 +69,7 @@ pub fn aplatir(dessins: &Dessins, maitre: &str) -> Result<Aplatissement, ErreurC
         dessins,
         maitre: doc,
         chemins: dessins.chemins(),
-        tol: 0.001 / metres_par_unite(doc.header.insertion_units),
+        tol: tolerance.unwrap_or_else(|| 0.001 / metres_par_unite(doc.header.insertion_units)),
         scene: Scene::default(),
         rapport: Rapport { maitre: maitre.to_string(), dessins: dessins.chemins(), avertissements, ..Rapport::default() },
         inclinees: 0,

@@ -12,9 +12,9 @@ pub mod mesure;
 pub mod proprietes;
 pub mod scene;
 
-pub use aplatir::{aplatir, Aplatissement, Dessins};
+pub use aplatir::{aplatir, aplatir_avec_tolerance, Aplatissement, Dessins};
 pub use erreur::ErreurCad;
-pub use importer::{charger_dessins, importer_zip, resoudre_chemin, trouver_maitres};
+pub use importer::{charger_dessins, choisir_maitre, importer_zip, resoudre_chemin, trouver_maitres};
 pub use inventaire::{inventorier, lire_entree, Inventaire};
 pub use lignes::{ecrire_lignes, extraire_lignes, Polyligne};
 pub use mesure::{emprise_depuis, lire_document, mesurer, Mesure};
