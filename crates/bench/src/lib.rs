@@ -1,6 +1,7 @@
 //! Banc natif : mesure des DWG des ZIP d'un dossier et écriture de CSV.
 use carto_cad::{ecrire_lignes, extraire_lignes, inventorier, lire_document, lire_entree, mesurer, ErreurCad};
 use carto_georef::l93_vers_mercator;
+use carto_wasm::{importer_zip_scn, Repere};
 use std::fs::File;
 use std::io;
 use std::path::Path;
@@ -120,4 +121,40 @@ pub fn exporter_lignes(zip: &Path, chemin: &str, facteur: f64, sortie: &Path) ->
     }
     std::fs::write(sortie, ecrire_lignes(&polys)).map_err(|e| format!("{} : {e}", sortie.display()))?;
     Ok((polys.len(), polys.iter().map(|p| p.points.len()).sum()))
+}
+
+fn u32_le(o: &[u8], i: usize) -> Result<usize, String> {
+    o.get(i..i + 4)
+        .map(|b| u32::from_le_bytes(b.try_into().unwrap()) as usize)
+        .ok_or_else(|| "SCN1 tronqué".to_string())
+}
+
+/// Extrait le rapport JSON en fin de SCN1.
+fn rapport_du_scn(scn: &[u8]) -> Result<String, String> {
+    if scn.get(..4) != Some(b"SCN1".as_slice()) {
+        return Err("SCN1 invalide".into());
+    }
+    let nc = u32_le(scn, 4)?;
+    let mut i = 8;
+    for _ in 0..nc {
+        i += 4 + u32_le(scn, i)? + 4;
+    }
+    let n = u32_le(scn, i)?;
+    i += 4;
+    for _ in 0..n {
+        let pts = u32_le(scn, i + 1 + 4 + 4 + 4)?;
+        i += 1 + 4 + 4 + 4 + 4 + 16 * pts;
+    }
+    let r = u32_le(scn, i)?;
+    let o = scn.get(i + 4..i + 4 + r).ok_or("SCN1 tronqué")?;
+    String::from_utf8(o.to_vec()).map_err(|e| e.to_string())
+}
+
+/// Importe le ZIP en scène SCN1, l'écrit dans `sortie` et rend le rapport JSON.
+/// En cas d'échec, l'erreur est le JSON structuré du moteur.
+pub fn exporter_scene(zip: &Path, repere: Repere, maitre: Option<&str>, sortie: &Path) -> Result<String, String> {
+    let octets = std::fs::read(zip).map_err(|e| format!("{} : {e}", zip.display()))?;
+    let scn = importer_zip_scn(&octets, repere, maitre)?;
+    std::fs::write(sortie, &scn).map_err(|e| format!("{} : {e}", sortie.display()))?;
+    rapport_du_scn(&scn)
 }

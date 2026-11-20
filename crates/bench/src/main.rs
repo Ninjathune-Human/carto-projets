@@ -2,7 +2,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 fn usage() -> ExitCode {
-    eprintln!("usage : bench mesurer <dossier_zips> <dossier_sortie>\n       bench export-lignes <zip> <chemin_dwg> <facteur> <sortie.lignes>");
+    eprintln!("usage : bench mesurer <dossier_zips> <dossier_sortie>\n       bench export-lignes <zip> <chemin_dwg> <facteur> <sortie.lignes>\n       bench scene <zip> <sortie.scn> [l93|mercator] [maitre]");
     ExitCode::from(2)
 }
 
@@ -33,6 +33,27 @@ fn main() -> ExitCode {
                 }
                 Err(e) => {
                     eprintln!("erreur : {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        [cmd, zip, sortie, reste @ ..] if cmd == "scene" && reste.len() <= 2 => {
+            let repere = match reste.first().map(String::as_str).unwrap_or("l93") {
+                "l93" => carto_wasm::Repere::L93,
+                "mercator" => carto_wasm::Repere::Mercator,
+                autre => {
+                    eprintln!("erreur : repère inconnu : {autre}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let maitre = reste.get(1).map(String::as_str);
+            match carto_bench::exporter_scene(Path::new(zip), repere, maitre, Path::new(sortie)) {
+                Ok(rapport) => {
+                    println!("{rapport}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("{e}");
                     ExitCode::FAILURE
                 }
             }
