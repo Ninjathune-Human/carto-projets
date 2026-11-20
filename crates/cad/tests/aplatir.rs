@@ -66,8 +66,8 @@ fn sous_dictionnaire(doc: &mut CadDocument, parent: Handle, cle: &str) -> Handle
     h
 }
 
-/// XCLIP de l'INSERT `insertion` : dictionnaire d'extension → `ACAD_FILTER` → `SPATIAL`.
-fn attacher_xclip(doc: &mut CadDocument, insertion: Handle, mut f: SpatialFilter) {
+/// XCLIP de l'INSERT `insertion` : dictionnaire d'extension → `ACAD_FILTER` → `SPATIAL` ; rend le filtre.
+fn attacher_xclip(doc: &mut CadDocument, insertion: Handle, mut f: SpatialFilter) -> Handle {
     let xdict = doc.ensure_extension_dictionary(insertion);
     let filtres = sous_dictionnaire(doc, xdict, "ACAD_FILTER");
     f.handle = doc.allocate_handle();
@@ -75,6 +75,20 @@ fn attacher_xclip(doc: &mut CadDocument, insertion: Handle, mut f: SpatialFilter
     let h = f.handle;
     doc.objects.insert(h, ObjectType::SpatialFilter(f));
     entree(doc, filtres, "SPATIAL", h);
+    h
+}
+
+/// Marque l'XCLIP `filtre` inversé, comme AutoCAD : dictionnaire d'extension du SPATIAL_FILTER →
+/// XRECORD `ACAD_XREC_ROUNDTRIP`, section (102) `ACAD_INVERTEDCLIP_ROUNDTRIP` suivie des sommets
+/// (code 10) du contour intérieur, s'il est donné.
+fn inverser_xclip(doc: &mut CadDocument, filtre: Handle, interieur: &[(f64, f64)]) {
+    doc.ensure_xrecord(filtre, "ACAD_XREC_ROUNDTRIP");
+    let x = doc.xrecord_mut(filtre, "ACAD_XREC_ROUNDTRIP").unwrap();
+    x.add_string(102, "ACAD_INVERTEDCLIP_ROUNDTRIP");
+    for &(px, py) in interieur {
+        x.add_point3d(10, px, py, 0.);
+    }
+    x.add_string(102, "ACAD_INVERTEDCLIP_ROUNDTRIP_COMPARE");
 }
 
 fn filtre(coins: &[(f64, f64)]) -> SpatialFilter {
@@ -858,6 +872,93 @@ fn xclip_imbriques_se_composent() {
     assert!(points_proches(t[0], &[[5., 5.], [10., 5.]]), "{:?}", t[0]);
 }
 
+#[test]
+fn xclip_inverse_masque_l_interieur() {
+    let mut doc = CadDocument::new();
+    definir_bloc(&mut doc, "B", Vector3::ZERO, vec![ligne(-5., 5., 15., 5., "0"), ligne(0., 2., 0., 8., "0")]);
+    let hi = inserer(&mut doc, Insert::new("B", Vector3::ZERO));
+    let f = attacher_xclip(&mut doc, hi, filtre(&[(0., 0.), (10., 10.)]));
+    inverser_xclip(&mut doc, f, &[]);
+    let r = aplatir_doc(doc);
+    let t = traits(&r);
+    // L'intérieur du contour est masqué ; un trait posé sur le contour reste visible.
+    assert_eq!(t.len(), 3, "{t:?}");
+    assert!(points_proches(t[0], &[[-5., 5.], [0., 5.]]), "{:?}", t[0]);
+    assert!(points_proches(t[1], &[[10., 5.], [15., 5.]]), "{:?}", t[1]);
+    assert!(points_proches(t[2], &[[0., 2.], [0., 8.]]), "{:?}", t[2]);
+    assert!(r.rapport.avertissements.is_empty(), "{:?}", r.rapport.avertissements);
+}
+
+#[test]
+fn xclip_inverse_contour_d_autocad() {
+    // AutoCAD range dans le SPATIAL_FILTER un contour « en trou de serrure » (le rectangle
+    // englobant relié au contour intérieur) et le contour intérieur dans l'XRECORD : c'est le plus
+    // petit des deux qui est masqué, et ce qui dépasse le rectangle englobant reste visible.
+    let mut doc = CadDocument::new();
+    definir_bloc(&mut doc, "B", Vector3::ZERO, vec![ligne(-5., 5., 30., 5., "0")]);
+    let hi = inserer(&mut doc, Insert::new("B", Vector3::ZERO));
+    let serrure = [
+        (0., 0.), (10., 0.), (10., 10.), (0., 10.), (0., 0.),
+        (-1., -1.), (-1., 11.), (16., 11.), (16., -1.), (-1., -1.),
+    ];
+    let f = attacher_xclip(&mut doc, hi, filtre(&serrure));
+    inverser_xclip(&mut doc, f, &[(0., 0.), (10., 10.)]);
+    let r = aplatir_doc(doc);
+    let t = traits(&r);
+    assert_eq!(t.len(), 2, "{t:?}");
+    assert!(points_proches(t[0], &[[-5., 5.], [0., 5.]]), "{:?}", t[0]);
+    assert!(points_proches(t[1], &[[10., 5.], [30., 5.]]), "{:?}", t[1]);
+}
+
+#[test]
+fn xclip_inverse_troue_une_surface() {
+    let mut doc = CadDocument::new();
+    let mut h = Hatch::solid();
+    h.paths = vec![carre(0., 0., 20.)];
+    definir_bloc(&mut doc, "B", Vector3::ZERO, vec![EntityType::Hatch(Box::new(h))]);
+    let hi = inserer(&mut doc, Insert::new("B", Vector3::ZERO));
+    let f = attacher_xclip(&mut doc, hi, filtre(&[(0., 0.), (10., 10.)]));
+    inverser_xclip(&mut doc, f, &[]);
+    let r = aplatir_doc(doc);
+    let s = surfaces(&r);
+    assert_eq!(s.len(), 1, "{:?}", r.scene.primitives);
+    assert!((aire_triangles(s[0]) - 300.).abs() < 1e-6, "{}", aire_triangles(s[0]));
+    // Le carré masqué ne porte plus aucun triangle.
+    let centres = s[0].chunks(3).map(|c| [(c[0][0] + c[1][0] + c[2][0]) / 3., (c[0][1] + c[1][1] + c[2][1]) / 3.]);
+    assert!(centres.into_iter().all(|c| !(c[0] > 0. && c[0] < 10. && c[1] > 0. && c[1] < 10.)));
+}
+
+#[test]
+fn xclip_inverse_imbrique_se_compose() {
+    // B (une ligne de -5 à 15) inséré dans A, A inséré dans le maître ; découpes de B sur
+    // [0, 10] et de A sur [5, 20], chacune normale ou inversée.
+    let cas = [
+        (true, false, vec![[[10., 5.], [15., 5.]]]), // B inversée : dans A, hors de B
+        (false, true, vec![[[0., 5.], [5., 5.]]]),   // A inversée : dans B, hors de A
+        (true, true, vec![[[-5., 5.], [0., 5.]]]),   // les deux : hors de A et de B
+    ];
+    for (b_inverse, a_inverse, attendu) in cas {
+        let mut doc = CadDocument::new();
+        definir_bloc(&mut doc, "B", Vector3::ZERO, vec![ligne(-5., 5., 15., 5., "0")]);
+        let hb = definir_bloc(&mut doc, "A", Vector3::ZERO, vec![EntityType::Insert(Insert::new("B", Vector3::ZERO))])[0];
+        let fb = attacher_xclip(&mut doc, hb, filtre(&[(0., 0.), (10., 10.)]));
+        let ha = inserer(&mut doc, Insert::new("A", Vector3::ZERO));
+        let fa = attacher_xclip(&mut doc, ha, filtre(&[(5., 0.), (20., 10.)]));
+        if b_inverse {
+            inverser_xclip(&mut doc, fb, &[]);
+        }
+        if a_inverse {
+            inverser_xclip(&mut doc, fa, &[]);
+        }
+        let r = aplatir_doc(doc);
+        let t = traits(&r);
+        assert_eq!(t.len(), attendu.len(), "B inversé {b_inverse}, A inversé {a_inverse} : {t:?}");
+        for (obtenu, a) in t.iter().zip(&attendu) {
+            assert!(points_proches(obtenu, a), "B inversé {b_inverse}, A inversé {a_inverse} : {obtenu:?}");
+        }
+    }
+}
+
 // --- Blocs dynamiques ---
 
 /// Bloc dynamique `nom` à deux états de visibilité, A (première LINE) puis B (seconde LINE),
@@ -986,4 +1087,19 @@ fn coordonnee_enorme_sans_panique() {
     assert_eq!(t.len(), 2, "{t:?}");
     assert!(points_proches(t[0], &[[2., 2.], [4., 2.]]), "{:?}", t[0]);
     assert!(points_proches(t[1], &[[0., 8.], [10., 8.]]), "{:?}", t[1]);
+}
+
+#[test]
+fn xclip_inverse_relu_d_un_dwg() {
+    // L'inversion passe par le dictionnaire d'extension du SPATIAL_FILTER, que la lecture DWG range à part.
+    let mut doc = CadDocument::new();
+    definir_bloc(&mut doc, "B", Vector3::ZERO, vec![ligne(-5., 5., 15., 5., "0")]);
+    let hi = inserer(&mut doc, Insert::new("B", Vector3::ZERO));
+    let f = attacher_xclip(&mut doc, hi, filtre(&[(0., 0.), (10., 10.)]));
+    inverser_xclip(&mut doc, f, &[]);
+    let relu = carto_cad::lire_document(&acadrust::DwgWriter::write_to_vec(&doc).unwrap()).unwrap();
+    let r = aplatir_doc(relu);
+    let t = traits(&r);
+    assert_eq!(t.len(), 2, "{t:?}");
+    assert!(points_proches(t[0], &[[-5., 5.], [0., 5.]]) && points_proches(t[1], &[[10., 5.], [15., 5.]]), "{t:?}");
 }

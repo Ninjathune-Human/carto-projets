@@ -650,7 +650,14 @@ impl<'a> Parcours<'a> {
                 let case = Affine::translation(f64::from(c) * i.column_spacing, f64::from(r) * i.row_spacing);
                 let t = tete.fois(&case).fois(&pied);
                 // La découpe, portée dans le repère du maître, se compose avec celles des blocs englobants.
-                let zone = decoupe.as_ref().and_then(|d| Zone::nouvelle(&d.iter().map(|p| t.point(*p)).collect::<Vec<_>>()));
+                let zone = decoupe.as_ref().and_then(|d| {
+                    let contour: Vec<[f64; 2]> = d.contour.iter().map(|p| t.point(*p)).collect();
+                    if d.inversee {
+                        Zone::inversee(&contour)
+                    } else {
+                        Zone::nouvelle(&contour)
+                    }
+                });
                 let englobante = match zone.map(|z| z.dans(self.zone.as_ref())) {
                     Some(z) if z.est_vide() => continue,
                     Some(z) => Some(self.zone.replace(z)),

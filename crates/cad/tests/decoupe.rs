@@ -81,3 +81,18 @@ fn points_aberrants_ecartes() {
     // Contour aberrant : découpe sans effet.
     assert!(Zone::nouvelle(&[[0., 0.], [1e200, 0.], [0., 1.]]).is_none());
 }
+
+#[test]
+fn zone_inversee_garde_l_exterieur_et_le_bord() {
+    let z = Zone::inversee(&contour_xclip(&[[0., 0.], [10., 10.]])).unwrap();
+    assert!(!z.est_vide());
+    assert!(z.couper_trait(&[[2., 2.], [8., 8.]]).is_empty(), "dedans : masqué");
+    assert_eq!(z.couper_trait(&[[20., 0.], [30., 5.]]), vec![vec![[20., 0.], [30., 5.]]], "dehors : gardé tel quel");
+    assert_eq!(z.couper_trait(&[[0., 2.], [0., 8.]]).len(), 1, "sur le bord : gardé");
+    let morceaux = z.couper_trait(&[[-5., 5.], [15., 5.]]);
+    assert_eq!(morceaux.len(), 2, "{morceaux:?}");
+    // Surface : le carré 20 × 20 privé du carré 10 × 10.
+    let carre20 = [[0., 0.], [20., 0.], [20., 20.], [0., 0.], [20., 20.], [0., 20.]];
+    assert!((aire(&z.couper_surface(&carre20)) - 300.).abs() < 1e-6);
+    assert!(Zone::inversee(&[[0., 0.], [1., 1.], [2., 2.]]).is_none(), "sans aire : sans effet");
+}
