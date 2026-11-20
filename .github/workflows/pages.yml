@@ -60,12 +60,15 @@ jobs:
       - name: Construire le module wasm
         run: wasm-pack build crates/wasm --target web --release --out-dir ../../essais/banc/pkg
       - name: Assembler le site (_site)
+        env:
+          CLE_ESRI: ${{ secrets.CLE_ESRI }}
         run: |
           mkdir -p _site/essais
           cp index.html banniere.svg catalogue.json _site/
           if [ -d data ]; then cp -r data _site/data; fi
           cp -r essais/banc essais/carte essais/sources _site/essais/
           rm -rf _site/essais/carte/test _site/essais/sources/test
+          python3 -c 'import json, os; print("export const CLE_ESRI = %s;" % json.dumps(os.environ.get("CLE_ESRI", "").strip()))' > _site/essais/carte/config.js
           du -sh _site
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
