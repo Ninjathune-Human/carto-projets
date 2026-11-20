@@ -9,4 +9,6 @@ pub enum ErreurCad {
     Dwg(String),
     #[error("entrée absente de l'archive : {0}")]
     EntreeAbsente(String),
+    #[error("dessin maître inconnu : {0}")]
+    MaitreInconnu(String),
 }

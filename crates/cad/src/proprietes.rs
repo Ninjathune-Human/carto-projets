@@ -46,7 +46,7 @@ fn couleur_propre(c: Color) -> Option<[u8; 3]> {
     }
 }
 
-fn couleur_calque(c: Option<&Layer>) -> [u8; 3] {
+pub(crate) fn couleur_calque(c: Option<&Layer>) -> [u8; 3] {
     c.and_then(|l| couleur_propre(l.color)).unwrap_or(NOIR)
 }
 
