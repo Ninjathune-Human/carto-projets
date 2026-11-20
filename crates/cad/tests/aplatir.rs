@@ -1,13 +1,17 @@
 use std::collections::BTreeMap;
-use std::f64::consts::FRAC_PI_2;
+use std::f64::consts::{FRAC_PI_2, FRAC_PI_4};
 
 use acadrust::entities::hatch::{BoundaryEdge, BoundaryPath, PolylineEdge};
 use acadrust::entities::{
     Block, Dimension, DimensionLinear, Hatch, Insert, LwVertex, Polyline2D, Polyline3D, Solid, Vertex2D,
 };
+use acadrust::objects::{
+    BlockVisibilityParameter, BlockVisibilityState, Dictionary, ObjectType, SortEntitiesTable, SpatialFilter, XRecord,
+};
 use acadrust::tables::{BlockRecord, Layer};
+use acadrust::types::Matrix4;
 use acadrust::{
-    Arc, CadDocument, Circle, Color, Ellipse, EntityType, Line, LineWeight, LwPolyline, Spline, Text,
+    Arc, CadDocument, Circle, Color, Ellipse, EntityType, Handle, Line, LineWeight, LwPolyline, Spline, Text,
     Vector2, Vector3,
 };
 use carto_cad::aplatir::{aplatir, Aplatissement, Dessins};
@@ -22,7 +26,8 @@ fn ligne(x1: f64, y1: f64, x2: f64, y2: f64, calque: &str) -> EntityType {
     EntityType::Line(l)
 }
 
-fn definir_bloc(doc: &mut CadDocument, nom: &str, base: Vector3, contenu: Vec<EntityType>) {
+/// Définit un bloc et renvoie les identifiants de ses entités, dans l'ordre.
+fn definir_bloc(doc: &mut CadDocument, nom: &str, base: Vector3, contenu: Vec<EntityType>) -> Vec<Handle> {
     let mut record = BlockRecord::new(nom);
     record.handle = doc.allocate_handle();
     let proprietaire = record.handle;
@@ -31,14 +36,69 @@ fn definir_bloc(doc: &mut CadDocument, nom: &str, base: Vector3, contenu: Vec<En
     bloc.common.owner_handle = proprietaire;
     let h = doc.add_entity(EntityType::Block(bloc)).unwrap();
     doc.block_records.get_mut(nom).unwrap().block_entity_handle = h;
-    for mut e in contenu {
-        e.common_mut().owner_handle = proprietaire;
-        doc.add_entity(e).unwrap();
-    }
+    contenu
+        .into_iter()
+        .map(|mut e| {
+            e.common_mut().owner_handle = proprietaire;
+            doc.add_entity(e).unwrap()
+        })
+        .collect()
 }
 
-fn inserer(doc: &mut CadDocument, i: Insert) {
-    doc.add_entity(EntityType::Insert(i)).unwrap();
+fn inserer(doc: &mut CadDocument, i: Insert) -> Handle {
+    doc.add_entity(EntityType::Insert(i)).unwrap()
+}
+
+/// Ajoute un objet de dictionnaire `cle` → `h` au dictionnaire `dico`.
+fn entree(doc: &mut CadDocument, dico: Handle, cle: &str, h: Handle) {
+    let Some(ObjectType::Dictionary(d)) = doc.objects.get_mut(&dico) else { panic!("dictionnaire attendu") };
+    d.add_entry(cle, h);
+}
+
+/// Sous-dictionnaire `cle` de `parent`.
+fn sous_dictionnaire(doc: &mut CadDocument, parent: Handle, cle: &str) -> Handle {
+    let mut d = Dictionary::new();
+    d.handle = doc.allocate_handle();
+    d.owner = parent;
+    let h = d.handle;
+    doc.objects.insert(h, ObjectType::Dictionary(d));
+    entree(doc, parent, cle, h);
+    h
+}
+
+/// XCLIP de l'INSERT `insertion` : dictionnaire d'extension → `ACAD_FILTER` → `SPATIAL`.
+fn attacher_xclip(doc: &mut CadDocument, insertion: Handle, mut f: SpatialFilter) {
+    let xdict = doc.ensure_extension_dictionary(insertion);
+    let filtres = sous_dictionnaire(doc, xdict, "ACAD_FILTER");
+    f.handle = doc.allocate_handle();
+    f.owner = filtres;
+    let h = f.handle;
+    doc.objects.insert(h, ObjectType::SpatialFilter(f));
+    entree(doc, filtres, "SPATIAL", h);
+}
+
+fn filtre(coins: &[(f64, f64)]) -> SpatialFilter {
+    let mut f = SpatialFilter::new();
+    f.boundary_points = coins.iter().map(|&(x, y)| Vector2::new(x, y)).collect();
+    f
+}
+
+/// Table SORTENTS du bloc `bloc` (dictionnaire d'extension → `ACAD_SORTENTS`) : entité → clé de tri.
+fn attacher_sortents(doc: &mut CadDocument, bloc: Handle, cles: &[(Handle, Handle)]) {
+    let mut xdict = Dictionary::new();
+    xdict.handle = doc.allocate_handle();
+    xdict.owner = bloc;
+    let hx = xdict.handle;
+    doc.objects.insert(hx, ObjectType::Dictionary(xdict));
+    let mut t = SortEntitiesTable::for_block(bloc);
+    t.handle = doc.allocate_handle();
+    t.owner_handle = hx;
+    for &(e, cle) in cles {
+        t.add_entry(e, cle);
+    }
+    let ht = t.handle;
+    doc.objects.insert(ht, ObjectType::SortEntitiesTable(t));
+    entree(doc, hx, "ACAD_SORTENTS", ht);
 }
 
 fn ajouter_calque(doc: &mut CadDocument, nom: &str, eteint: bool, gele: bool) {
@@ -613,4 +673,220 @@ fn bloc_auto_insere_sans_panique() {
     let r = aplatir_doc(doc);
     assert_eq!(traits(&r).len(), 16);
     assert_eq!(r.rapport.avertissements.len(), 1, "{:?}", r.rapport.avertissements);
+}
+
+// --- XCLIP ---
+
+fn bbox(p: &[[f64; 2]]) -> ([f64; 2], [f64; 2]) {
+    let mut min = [f64::INFINITY; 2];
+    let mut max = [f64::NEG_INFINITY; 2];
+    for q in p {
+        for k in 0..2 {
+            min[k] = min[k].min(q[k]);
+            max[k] = max[k].max(q[k]);
+        }
+    }
+    (min, max)
+}
+
+fn surfaces(a: &Aplatissement) -> Vec<&Vec<[f64; 2]>> {
+    a.scene
+        .primitives
+        .iter()
+        .filter_map(|p| match p {
+            Primitive::Surface { triangles, .. } => Some(triangles),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn xclip_coupe_un_trait() {
+    let mut doc = CadDocument::new();
+    definir_bloc(&mut doc, "B", Vector3::ZERO, vec![ligne(-5., 5., 15., 5., "0")]);
+    let hi = inserer(&mut doc, Insert::new("B", Vector3::ZERO));
+    attacher_xclip(&mut doc, hi, filtre(&[(0., 0.), (10., 10.)]));
+    let r = aplatir_doc(doc);
+    let t = traits(&r);
+    assert_eq!(t.len(), 1, "{t:?}");
+    assert!(points_proches(t[0], &[[0., 5.], [10., 5.]]), "{:?}", t[0]);
+}
+
+#[test]
+fn xclip_coupe_une_surface() {
+    let mut doc = CadDocument::new();
+    let mut h = Hatch::solid();
+    h.paths = vec![carre(0., 0., 20.)];
+    definir_bloc(&mut doc, "B", Vector3::ZERO, vec![EntityType::Hatch(Box::new(h))]);
+    let hi = inserer(&mut doc, Insert::new("B", Vector3::ZERO));
+    attacher_xclip(&mut doc, hi, filtre(&[(0., 0.), (10., 10.)]));
+    let r = aplatir_doc(doc);
+    let s = surfaces(&r);
+    assert_eq!(s.len(), 1, "{:?}", r.scene.primitives);
+    assert_eq!(s[0].len() % 3, 0);
+    assert!((aire_triangles(s[0]) - 100.).abs() < 1e-6, "{}", aire_triangles(s[0]));
+    let (min, max) = bbox(s[0]);
+    assert!(proche(min, [0., 0.]) && proche(max, [10., 10.]), "{min:?} {max:?}");
+}
+
+#[test]
+fn xclip_desactive() {
+    let mut doc = CadDocument::new();
+    definir_bloc(&mut doc, "B", Vector3::ZERO, vec![ligne(-5., 5., 15., 5., "0")]);
+    let hi = inserer(&mut doc, Insert::new("B", Vector3::ZERO));
+    let mut f = filtre(&[(0., 0.), (10., 10.)]);
+    f.display_enabled = false;
+    attacher_xclip(&mut doc, hi, f);
+    let r = aplatir_doc(doc);
+    let t = traits(&r);
+    assert_eq!(t.len(), 1);
+    assert!(points_proches(t[0], &[[-5., 5.], [15., 5.]]), "{:?}", t[0]);
+}
+
+#[test]
+fn xclip_polygonal_ramene_dans_le_bloc() {
+    // Contour triangulaire saisi en coordonnées générales autour d'une INSERT placée en (100, 0) :
+    // la transformation inverse du bloc le ramène dans le repère du bloc.
+    let mut doc = CadDocument::new();
+    definir_bloc(&mut doc, "B", Vector3::ZERO, vec![ligne(-5., 2., 15., 2., "0")]);
+    let hi = inserer(&mut doc, Insert::new("B", Vector3::new(100., 0., 0.)));
+    let mut f = filtre(&[(100., 0.), (110., 0.), (100., 10.)]);
+    f.inverse_block_transform = Matrix4::translation(-100., 0., 0.);
+    attacher_xclip(&mut doc, hi, f);
+    let r = aplatir_doc(doc);
+    let t = traits(&r);
+    assert_eq!(t.len(), 1, "{t:?}");
+    assert!(points_proches(t[0], &[[100., 2.], [108., 2.]]), "{:?}", t[0]);
+}
+
+#[test]
+fn xclip_rectangulaire_d_une_insertion_tournee() {
+    // Le rectangle de deux coins est parallèle aux axes du contour, pas à ceux du bloc tourné.
+    let mut doc = CadDocument::new();
+    let mut h = Hatch::solid();
+    h.paths = vec![carre(-100., -100., 200.)];
+    definir_bloc(&mut doc, "B", Vector3::ZERO, vec![EntityType::Hatch(Box::new(h))]);
+    let hi = inserer(&mut doc, Insert::new("B", Vector3::ZERO).with_rotation(FRAC_PI_4));
+    let mut f = filtre(&[(0., 0.), (10., 10.)]);
+    f.inverse_block_transform = Matrix4::rotation_z(-FRAC_PI_4);
+    attacher_xclip(&mut doc, hi, f);
+    let r = aplatir_doc(doc);
+    let s = surfaces(&r);
+    assert_eq!(s.len(), 1);
+    assert!((aire_triangles(s[0]) - 100.).abs() < 1e-6, "{}", aire_triangles(s[0]));
+    let (min, max) = bbox(s[0]);
+    assert!(proche(min, [0., 0.]) && proche(max, [10., 10.]), "{min:?} {max:?}");
+}
+
+#[test]
+fn xclip_imbriques_se_composent() {
+    let mut doc = CadDocument::new();
+    definir_bloc(&mut doc, "B", Vector3::ZERO, vec![ligne(-5., 5., 15., 5., "0")]);
+    let hb = definir_bloc(&mut doc, "A", Vector3::ZERO, vec![EntityType::Insert(Insert::new("B", Vector3::ZERO))])[0];
+    attacher_xclip(&mut doc, hb, filtre(&[(0., 0.), (10., 10.)]));
+    let ha = inserer(&mut doc, Insert::new("A", Vector3::ZERO));
+    attacher_xclip(&mut doc, ha, filtre(&[(5., 0.), (20., 10.)]));
+    let r = aplatir_doc(doc);
+    let t = traits(&r);
+    assert_eq!(t.len(), 1, "{t:?}");
+    assert!(points_proches(t[0], &[[5., 5.], [10., 5.]]), "{:?}", t[0]);
+}
+
+// --- Blocs dynamiques ---
+
+/// Bloc dynamique `nom` à deux états de visibilité, A (première LINE) puis B (seconde LINE),
+/// inséré directement ; `etat` est l'état enregistré dans le cache d'évaluation de l'INSERT.
+fn doc_dynamique(nom: &str, etat: Option<&str>) -> CadDocument {
+    let mut doc = CadDocument::new();
+    let h = definir_bloc(&mut doc, nom, Vector3::ZERO, vec![ligne(0., 0., 1., 0., "0"), ligne(0., 5., 1., 5., "0")]);
+    let bloc = doc.block_records.get(nom).unwrap().handle;
+    let mut p = BlockVisibilityParameter::default();
+    p.handle = doc.allocate_handle();
+    p.owner = bloc;
+    p.eval_node_id = 7;
+    p.all_blocks = h.clone();
+    for (n, e) in [("A", h[0]), ("B", h[1])] {
+        p.states.push(BlockVisibilityState { name: n.into(), visible_blocks: vec![e], visible_params: vec![] });
+    }
+    doc.block_visibility_params.insert(p.handle, p);
+    let hi = inserer(&mut doc, Insert::new(nom, Vector3::ZERO));
+    if let Some(etat) = etat {
+        let mut d = doc.ensure_extension_dictionary(hi);
+        for cle in ["AcDbBlockRepresentation", "AppDataCache", "ACAD_ENHANCEDBLOCKDATA"] {
+            d = sous_dictionnaire(&mut doc, d, cle);
+        }
+        let mut x = XRecord::new();
+        x.handle = doc.allocate_handle();
+        x.owner = d;
+        x.add_string(1, etat);
+        let hx = x.handle;
+        doc.objects.insert(hx, ObjectType::XRecord(x));
+        entree(&mut doc, d, "7", hx);
+    }
+    doc
+}
+
+fn ordonnees(r: &Aplatissement) -> Vec<f64> {
+    traits(r).iter().map(|t| t[0][1]).collect()
+}
+
+#[test]
+fn visibilite_dynamique() {
+    let r = aplatir_doc(doc_dynamique("PORTE", Some("B")));
+    assert_eq!(ordonnees(&r), vec![5.]);
+}
+
+#[test]
+fn visibilite_dynamique_etat_par_defaut() {
+    // Sans état enregistré, AutoCAD affiche le premier état de la liste.
+    let r = aplatir_doc(doc_dynamique("PORTE", None));
+    assert_eq!(ordonnees(&r), vec![0.]);
+}
+
+#[test]
+fn visibilite_dynamique_bloc_anonyme_non_filtre() {
+    // Une représentation anonyme porte déjà l'état évalué : rien n'est filtré.
+    let r = aplatir_doc(doc_dynamique("*U12", Some("B")));
+    assert_eq!(ordonnees(&r), vec![0., 5.]);
+}
+
+// --- SORTENTS ---
+
+#[test]
+fn sortents_reordonne() {
+    let mut doc = CadDocument::new();
+    let h: Vec<Handle> = [1., 2., 3.].iter().map(|&x| doc.add_entity(ligne(x, 0., x, 1., "0")).unwrap()).collect();
+    let espace_objet = doc.block_records.get("*Model_Space").unwrap().handle;
+    // Permutation de clés à la manière d'AutoCAD : la 3e LINE prend la clé de la 1re, et ainsi de suite.
+    attacher_sortents(&mut doc, espace_objet, &[(h[2], h[0]), (h[0], h[1]), (h[1], h[2])]);
+    let r = aplatir_doc(doc);
+    let premiers: Vec<f64> = traits(&r).iter().map(|t| t[0][0]).collect();
+    assert_eq!(premiers, vec![3., 1., 2.]);
+}
+
+#[test]
+fn sortents_dans_un_bloc() {
+    let mut doc = CadDocument::new();
+    let h = definir_bloc(&mut doc, "B", Vector3::ZERO, (1..=3).map(|x| ligne(x as f64, 0., x as f64, 1., "0")).collect());
+    let bloc = doc.block_records.get("B").unwrap().handle;
+    // Entité absente de la table : sa propre clé. Clé nulle : sa propre clé aussi.
+    attacher_sortents(&mut doc, bloc, &[(h[2], Handle::new(1)), (h[0], Handle::NULL)]);
+    inserer(&mut doc, Insert::new("B", Vector3::ZERO));
+    let r = aplatir_doc(doc);
+    let premiers: Vec<f64> = traits(&r).iter().map(|t| t[0][0]).collect();
+    assert_eq!(premiers, vec![3., 1., 2.]);
+}
+
+#[test]
+fn xclip_garde_le_trou_d_une_hachure() {
+    let mut doc = CadDocument::new();
+    let mut h = Hatch::solid();
+    h.paths = vec![carre(0., 0., 20.), carre(4., 4., 2.)];
+    definir_bloc(&mut doc, "B", Vector3::ZERO, vec![EntityType::Hatch(Box::new(h))]);
+    let hi = inserer(&mut doc, Insert::new("B", Vector3::ZERO));
+    attacher_xclip(&mut doc, hi, filtre(&[(0., 0.), (10., 10.)]));
+    let r = aplatir_doc(doc);
+    let s = surfaces(&r);
+    assert_eq!(s.len(), 1);
+    assert!((aire_triangles(s[0]) - 96.).abs() < 1e-6, "{}", aire_triangles(s[0]));
 }

@@ -1,6 +1,8 @@
 //! Aplatissement d'un dessin : l'espace objet et les blocs insérés deviennent une scène de
-//! traits et de surfaces, en unités du dessin maître, dans l'ordre de la base.
+//! traits et de surfaces, en unités du dessin maître, dans l'ordre d'affichage (table SORTENTS de
+//! chaque bloc quand elle existe, sinon ordre de la base), XCLIP et visibilité dynamique appliqués.
 
+use crate::decoupe::{xclip_de, Zone};
 use crate::geometrie::{arc_points, bande, ellipse_points, renflement_points, spline_points, trianguler};
 use crate::hachures::anneaux_hachure;
 use crate::mesure::nom_de_type;
@@ -8,8 +10,10 @@ use crate::proprietes::{calque_gele, calque_visible, couleur_calque, metres_par_
 use crate::scene::{Primitive, Rapport, Scene};
 use crate::ErreurCad;
 use acadrust::entities::{Insert, Spline};
-use acadrust::{CadDocument, EntityType, Vector3};
-use std::collections::BTreeMap;
+use acadrust::objects::{BlockVisibilityParameter, BlockVisibilityState, ObjectType, SortEntitiesTable};
+use acadrust::{BlockRecord, CadDocument, EntityType, Handle, Vector3};
+use std::collections::hash_map::Entry;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::f64::consts::TAU;
 
 /// Garde contre les blocs qui s'insèrent eux-mêmes.
@@ -39,9 +43,13 @@ pub fn aplatir(dessins: &Dessins, maitre: &str) -> Result<Aplatissement, ErreurC
         scene: Scene::default(),
         rapport: Rapport { maitre: maitre.to_string(), dessins: vec![maitre.to_string()], ..Rapport::default() },
         inclinees: 0,
+        zone: None,
+        tables: tables_sortents(doc),
     };
-    for e in doc.model_space_entities() {
-        p.entite(e, &Affine::IDENTITE, None, 0);
+    if let Some(espace_objet) = doc.block_records.get("*Model_Space") {
+        for e in p.contenu(espace_objet) {
+            p.entite(e, &Affine::IDENTITE, None, 0);
+        }
     }
     if p.inclinees > 0 {
         p.rapport
@@ -207,6 +215,70 @@ fn courbe_spline(s: &Spline, tol: f64) -> Vec<[f64; 2]> {
     spline_points(usize::try_from(s.degree).unwrap_or(3).max(1), &s.knots, &ctrl, poids, tol)
 }
 
+/// Tables SORTENTS par bloc. Chaque table est rangée sous la clé `ACAD_SORTENTS` du dictionnaire
+/// d'extension de son bloc et le désigne elle-même (`block_owner_handle`) : une seule passe sur les
+/// objets évite de chercher ce dictionnaire bloc par bloc.
+fn tables_sortents(doc: &CadDocument) -> HashMap<Handle, &SortEntitiesTable> {
+    let mut tables: HashMap<Handle, &SortEntitiesTable> = HashMap::new();
+    for o in doc.objects.values() {
+        let ObjectType::SortEntitiesTable(t) = o else { continue };
+        let bloc = match t.block_owner_handle {
+            h if h.is_null() => doc.object_owner(t.owner_handle).unwrap_or(Handle::NULL),
+            h => h,
+        };
+        match tables.entry(bloc) {
+            _ if bloc.is_null() => {}
+            Entry::Vacant(v) => {
+                v.insert(t);
+            }
+            // Deux tables pour un bloc : la plus ancienne, pour un résultat indépendant du hachage.
+            Entry::Occupied(mut o) if t.handle < o.get().handle => {
+                o.insert(t);
+            }
+            Entry::Occupied(_) => {}
+        }
+    }
+    tables
+}
+
+/// Entrée `cle` d'un dictionnaire.
+fn entree_de(doc: &CadDocument, dico: Handle, cle: &str) -> Option<Handle> {
+    match doc.objects.get(&dico)? {
+        ObjectType::Dictionary(d) => d.get(cle),
+        _ => None,
+    }
+}
+
+/// État de visibilité courant : celui du cache d'évaluation de l'INSERT (dictionnaire d'extension
+/// → `AcDbBlockRepresentation` → `AppDataCache` → `ACAD_ENHANCEDBLOCKDATA` → numéro du nœud, XRECORD
+/// dont le code 1 nomme l'état), sinon le premier de la liste, état par défaut d'AutoCAD.
+fn etat_courant<'p>(doc: &CadDocument, i: &Insert, p: &'p BlockVisibilityParameter) -> Option<&'p BlockVisibilityState> {
+    let noeud = p.eval_node_id.to_string();
+    let mut h = i.common.xdictionary_handle;
+    for cle in ["AcDbBlockRepresentation", "AppDataCache", "ACAD_ENHANCEDBLOCKDATA", noeud.as_str()] {
+        h = h.and_then(|d| entree_de(doc, d, cle));
+    }
+    let nom = match h.and_then(|h| doc.objects.get(&h)) {
+        Some(ObjectType::XRecord(x)) => x.entries.iter().find(|e| e.code == 1).and_then(|e| e.value.as_string()),
+        _ => None,
+    };
+    nom.and_then(|n| p.states.iter().find(|s| s.name == n)).or(p.states.first())
+}
+
+/// Entités qu'un bloc dynamique référencé directement masque : celles que gouverne son paramètre de
+/// visibilité et que l'état courant ne montre pas. Une représentation anonyme (`*U…`) porte déjà
+/// l'état évalué (entités des autres états marquées invisibles) : rien à filtrer.
+fn masquees_par_visibilite(doc: &CadDocument, i: &Insert, br: &BlockRecord) -> HashSet<Handle> {
+    if doc.block_visibility_params.is_empty() || br.flags.anonymous || i.block_name.starts_with('*') {
+        return HashSet::new();
+    }
+    let Some((_, p)) = doc.dynamic_visibility_for_insert(i.common.handle) else { return HashSet::new() };
+    let Some(etat) = etat_courant(doc, i, p) else { return HashSet::new() };
+    let visibles: HashSet<&Handle> = etat.visible_blocks.iter().collect();
+    let gouvernees = p.all_blocks.iter().chain(p.states.iter().flat_map(|s| &s.visible_blocks));
+    gouvernees.filter(|h| !visibles.contains(h)).copied().collect()
+}
+
 struct Parcours<'a> {
     doc: &'a CadDocument,
     /// Tolérance de corde en unités du dessin maître.
@@ -214,9 +286,28 @@ struct Parcours<'a> {
     scene: Scene,
     rapport: Rapport,
     inclinees: u64,
+    /// Zone visible des XCLIP englobants, dans le repère du maître ; `None` : pas de découpe.
+    zone: Option<Zone>,
+    /// Table SORTENTS de chaque bloc, par identifiant de bloc.
+    tables: HashMap<Handle, &'a SortEntitiesTable>,
 }
 
-impl Parcours<'_> {
+impl<'a> Parcours<'a> {
+    /// Entités d'un bloc dans l'ordre d'affichage : clés croissantes de sa table SORTENTS quand elle
+    /// existe (une entité absente de la table, ou à clé nulle, a pour clé son propre identifiant ;
+    /// à clé égale, ordre de la base), sinon ordre de la base.
+    fn contenu(&self, br: &BlockRecord) -> Vec<&'a EntityType> {
+        let doc = self.doc;
+        let mut v: Vec<&'a EntityType> = br.entity_handles.iter().filter_map(|h| doc.get_entity(*h)).collect();
+        if let Some(t) = self.tables.get(&br.handle) {
+            v.sort_by_key(|e| {
+                let h = e.common().handle;
+                t.get_sort_handle(h).filter(|c| !c.is_null()).unwrap_or(h)
+            });
+        }
+        v
+    }
+
     fn avertir(&mut self, message: String) {
         if !self.rapport.avertissements.contains(&message) {
             self.rapport.avertissements.push(message);
@@ -372,17 +463,29 @@ impl Parcours<'_> {
         if !points.iter().all(|p| p[0].is_finite() && p[1].is_finite()) {
             return;
         }
+        let mut morceaux = match (&self.zone, surface) {
+            (None, _) => vec![points],
+            (Some(z), false) => z.couper_trait(&points),
+            (Some(z), true) => vec![z.couper_surface(&points)],
+        };
+        morceaux.retain(|p| p.len() >= minimum);
+        if morceaux.is_empty() {
+            return;
+        }
         let calque = self.scene.calque(&h.calque, couleur_calque(self.doc.layers.get(&h.calque)));
         let couleur = [couleur[0], couleur[1], couleur[2], h.alpha];
-        self.scene.primitives.push(if surface {
-            Primitive::Surface { calque, couleur, triangles: points }
-        } else {
-            Primitive::Trait { calque, couleur, epaisseur_mm: h.epaisseur_mm, points }
-        });
+        for points in morceaux {
+            self.scene.primitives.push(if surface {
+                Primitive::Surface { calque, couleur, triangles: points }
+            } else {
+                Primitive::Trait { calque, couleur, epaisseur_mm: h.epaisseur_mm, points }
+            });
+        }
     }
 
     /// INSERT et MINSERT : `T(insertion) · R(rotation) · T(c · espacement, r · espacement) · S(échelles) · T(−base)`,
-    /// précédé du miroir x → −x si la normale est −Z.
+    /// précédé du miroir x → −x si la normale est −Z. Le contenu suit l'ordre d'affichage du bloc, privé
+    /// des entités masquées par l'état de visibilité courant, et découpé par l'XCLIP de l'INSERT.
     fn insertion(&mut self, i: &Insert, h: &Herite, repere: &Affine, profondeur: usize) {
         let doc = self.doc;
         if calque_gele(doc, &h.calque) {
@@ -416,13 +519,26 @@ impl Parcours<'_> {
             .fois(&Affine::translation(i.insert_point.x, i.insert_point.y))
             .fois(&Affine::rotation(i.rotation));
         let pied = Affine::echelle(i.x_scale(), i.y_scale()).fois(&Affine::translation(-base.x, -base.y));
-        let contenu: Vec<&EntityType> = doc.entities_in_block(&i.block_name).collect();
+        let mut contenu = self.contenu(br);
+        let masquees = masquees_par_visibilite(doc, i, br);
+        contenu.retain(|e| !masquees.contains(&e.common().handle));
+        let decoupe = xclip_de(doc, i);
         for r in 0..lignes {
             for c in 0..colonnes {
                 let case = Affine::translation(f64::from(c) * i.column_spacing, f64::from(r) * i.row_spacing);
                 let t = tete.fois(&case).fois(&pied);
+                // La découpe, portée dans le repère du maître, se compose avec celles des blocs englobants.
+                let zone = decoupe.as_ref().and_then(|d| Zone::nouvelle(&d.iter().map(|p| t.point(*p)).collect::<Vec<_>>()));
+                let englobante = match zone.map(|z| z.dans(self.zone.as_ref())) {
+                    Some(z) if z.est_vide() => continue,
+                    Some(z) => Some(self.zone.replace(z)),
+                    None => None,
+                };
                 for e in &contenu {
                     self.entite(e, &t, Some(h), profondeur + 1);
+                }
+                if let Some(z) = englobante {
+                    self.zone = z;
                 }
             }
         }

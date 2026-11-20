@@ -1,6 +1,7 @@
 //! Crate cad de carto-projets.
 
 pub mod aplatir;
+pub mod decoupe;
 pub mod erreur;
 pub mod geometrie;
 pub mod hachures;
