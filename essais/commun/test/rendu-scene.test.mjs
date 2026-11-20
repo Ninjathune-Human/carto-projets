@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { preparerTampons, origineScene } from "../rendu-scene.js";
+import { preparerTampons, origineScene, empriseACadrer } from "../rendu-scene.js";
 
 const trait = (points, options = {}) => ({
   genre: "trait",
@@ -119,4 +119,22 @@ test("origine_dans_le_plan_malgre_un_objet_egare", () => {
   const [x, y] = origineScene(s);
   assert.ok(x >= 1040000 && x <= 1040010);
   assert.ok(y >= 6300000 && y <= 6300010);
+});
+
+test("emprise_a_cadrer", () => {
+  // Objet égaré à l'origine : il sort du cadrage, le plan reste entier.
+  const complete = [0, 0, 1040010, 6300010];
+  const essentielle = [1040000, 6300000, 1040010, 6300010];
+  assert.deepEqual(empriseACadrer({ emprise: essentielle }, complete), [1039995, 6299995, 1040010, 6300010]);
+  // Sans objet égaré : les percentiles rognent le plan, l'emprise complète est gardée.
+  assert.deepEqual(empriseACadrer({ emprise: [10, 10, 90, 90] }, [0, 0, 100, 100]), [0, 0, 100, 100]);
+  // Absente, nulle ou invalide : repli sur l'emprise complète.
+  assert.deepEqual(empriseACadrer({}, complete), complete);
+  assert.deepEqual(empriseACadrer({ emprise: null }, complete), complete);
+  assert.deepEqual(empriseACadrer(undefined, complete), complete);
+  assert.deepEqual(empriseACadrer({ emprise: [1, 2, 3] }, complete), complete);
+  assert.deepEqual(empriseACadrer({ emprise: [1, 2, NaN, 4] }, complete), complete);
+  assert.deepEqual(empriseACadrer({ emprise: [5, 2, 3, 4] }, complete), complete);
+  assert.equal(empriseACadrer({}, null), null);
+  assert.deepEqual(empriseACadrer({ emprise: essentielle }, null), essentielle);
 });

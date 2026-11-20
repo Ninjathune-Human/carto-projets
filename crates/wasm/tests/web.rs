@@ -164,6 +164,33 @@ mod import {
         assert_eq!(rapport["systeme"], "Lambert 93");
     }
 
+    fn emprise(rapport: &serde_json::Value) -> [f64; 4] {
+        let v: Vec<f64> = rapport["emprise"].as_array().expect("emprise attendue").iter().map(|v| v.as_f64().unwrap()).collect();
+        v.try_into().unwrap()
+    }
+
+    #[test]
+    fn emprise_essentielle_sans_objet_egare() {
+        // L'objet égaré à l'origine est importé mais reste hors de l'emprise du rapport.
+        let mut l = NICE.to_vec();
+        l.push([0., 0., 0., 0.]);
+        let z = zip_de_test(&[("plan.dwg", &dwg(&l))]);
+        let (_, _, rapport) = lire(&importer_zip_scn(&z, Repere::L93, None).unwrap());
+        let e = emprise(&rapport);
+        assert!(e[0] > 1_000_000. && e[1] > 6_000_000., "l'origine est exclue : {e:?}");
+        assert!(e[0] <= 1_042_000. && e[1] <= 6_298_000. && e[2] >= 1_042_150. && e[3] >= 6_298_200., "le plan est couvert : {e:?}");
+    }
+
+    #[test]
+    fn emprise_dans_le_repere_demande() {
+        let (_, _, rapport) = lire(&importer_zip_scn(&zip_nice(), Repere::Mercator, None).unwrap());
+        let e = emprise(&rapport);
+        for (x, y) in [(1_042_000., 6_298_000.), (1_042_150., 6_298_200.), (1_042_000., 6_298_200.), (1_042_150., 6_298_000.)] {
+            let (mx, my) = carto_georef::l93_vers_mercator(x, y).unwrap();
+            assert!(mx >= e[0] - 1e-6 && mx <= e[2] + 1e-6 && my >= e[1] - 1e-6 && my <= e[3] + 1e-6, "{mx},{my} hors de {e:?}");
+        }
+    }
+
     #[test]
     fn non_georeference() {
         let z = zip_de_test(&[("plan.dwg", &dwg(&[[0., 0., 10., 10.], [10., 10., 20., 5.]]))]);

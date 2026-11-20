@@ -222,6 +222,28 @@ export function origineScene(scene) {
   return [mediane(xs), mediane(ys)];
 }
 
+/**
+ * Emprise à cadrer en vue d'ensemble, à partir de `complete` (emprise de toutes les primitives)
+ * et de l'emprise essentielle du rapport (percentiles 2 à 98 des points dans la Métropole, voir
+ * carto-georef). L'emprise essentielle seule rognerait le plan (jusqu'à 2 % des points de chaque
+ * côté) ; l'emprise complète réduirait le plan à un point s'il y a un objet égaré loin (cartouche
+ * à l'origine). D'où : l'emprise complète bornée à l'emprise essentielle élargie, de chaque côté,
+ * de la moitié de son plus grand côté. Sans emprise essentielle valide (4 nombres finis
+ * ordonnés) : l'emprise complète.
+ */
+export function empriseACadrer(rapport, complete) {
+  const e = rapport?.emprise;
+  const valide = Array.isArray(e) && e.length === 4 && e.every(Number.isFinite) && e[0] <= e[2] && e[1] <= e[3];
+  if (!valide) return complete;
+  if (!complete) return e;
+  const d = Math.max(e[2] - e[0], e[3] - e[1]) / 2;
+  const b = [
+    Math.max(complete[0], e[0] - d), Math.max(complete[1], e[1] - d),
+    Math.min(complete[2], e[2] + d), Math.min(complete[3], e[3] + d),
+  ];
+  return b[0] <= b[2] && b[1] <= b[3] ? b : e;
+}
+
 // ---------------------------------------------------------------- WebGL2
 
 const ENTETE = `#version 300 es

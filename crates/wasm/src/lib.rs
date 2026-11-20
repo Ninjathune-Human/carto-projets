@@ -100,20 +100,35 @@ pub fn importer_zip_scn(octets: &[u8], repere: Repere, maitre: Option<&str>) -> 
         e => lecture(e),
     })?;
     let points: Vec<[f64; 2]> = a.scene.points_mut().map(|p| *p).collect();
-    let (reco, _emprise) = reconnaitre_points(&points)
+    let (reco, emprise) = reconnaitre_points(&points)
         .ok_or_else(|| erreur_json("non_georeference", MESSAGE_NON_GEOREFERENCE))?;
     let facteur = reco.facteur;
     let conv = Convertisseur::nouveau(reco).map_err(lecture)?;
     a.rapport.systeme = Some(reco.systeme.nom().to_string());
 
-    let mut perdus = 0usize;
-    for p in a.scene.points_mut() {
-        let (x, y) = (p[0] * facteur, p[1] * facteur);
-        let r = match repere {
+    let convertir = |x: f64, y: f64| {
+        let (x, y) = (x * facteur, y * facteur);
+        match repere {
             Repere::L93 => conv.vers_l93(x, y),
             Repere::Mercator => conv.vers_mercator(x, y),
-        };
-        match r {
+        }
+    };
+    // Emprise essentielle (unités du dessin) : ses quatre coins convertis, puis leur boîte.
+    // Un coin non convertible laisse l'emprise inconnue.
+    let [x0, y0, x1, y1] = emprise;
+    a.rapport.emprise = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+        .into_iter()
+        .map(|(x, y)| convertir(x, y).ok().filter(|(x, y)| x.is_finite() && y.is_finite()))
+        .collect::<Option<Vec<(f64, f64)>>>()
+        .map(|coins| {
+            coins.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |e, &(x, y)| {
+                [e[0].min(x), e[1].min(y), e[2].max(x), e[3].max(y)]
+            })
+        });
+
+    let mut perdus = 0usize;
+    for p in a.scene.points_mut() {
+        match convertir(p[0], p[1]) {
             Ok((x, y)) if x.is_finite() && y.is_finite() => *p = [x, y],
             _ => {
                 *p = [f64::NAN, f64::NAN];

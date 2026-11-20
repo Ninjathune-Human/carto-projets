@@ -32,6 +32,9 @@ pub struct Rapport {
     pub ignorees: BTreeMap<String, u64>,
     pub avertissements: Vec<String>,
     pub systeme: Option<String>,
+    /// Emprise essentielle `[xmin, ymin, xmax, ymax]` dans le repère de la scène (objets égarés
+    /// écartés), pour cadrer la vue ; `null` en JSON si elle n'est pas connue.
+    pub emprise: Option<[f64; 4]>,
 }
 
 impl Scene {

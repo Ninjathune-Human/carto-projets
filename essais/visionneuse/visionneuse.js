@@ -3,7 +3,7 @@
 // Rien ne quitte le navigateur : le ZIP et la capture sont lus localement.
 
 import { lireScene } from "../commun/scene.js";
-import { preparerTampons, origineScene, creerRendu } from "../commun/rendu-scene.js";
+import { preparerTampons, origineScene, empriseACadrer, creerRendu } from "../commun/rendu-scene.js";
 
 const FOND = [0xd9 / 255, 0xd9 / 255, 0xd9 / 255];
 const RESOLUTION_MIN = 1e-4;   // m par px CSS : 0,1 mm
@@ -50,7 +50,7 @@ const canvas = $("plan");
 // Chaque image est effacée en gris opaque et le mélange garde l'alpha à 1 : le canvas reste opaque.
 const gl = canvas.getContext("webgl2", { antialias: true, depth: true });
 let rendu = null;
-let projet = null; // { scene, tampons, visibles, nbTraits, nbSurfaces }
+let projet = null; // { scene, tampons, visibles, nbTraits, nbSurfaces, cadrage }
 
 const vue = { centre: [0, 0], resolution: 1 }; // repère Lambert 93, m par px CSS
 let taille = [1, 1];                            // px CSS
@@ -140,7 +140,7 @@ function zoomer(px, py, facteur) {
 }
 
 function vueEnsemble() {
-  const e = projet?.tampons.emprise;
+  const e = projet?.cadrage;
   if (!e) return;
   // Zone utile : à droite du panneau déplié, s'il laisse au moins la moitié du plan.
   let gauche = 0;
@@ -333,11 +333,13 @@ function ouvrirScene(scene, demande, ms) {
     visibles: scene.calques.map(() => true),
     nbTraits,
     nbSurfaces: scene.primitives.length - nbTraits,
+    // Un objet égaré loin du plan ne réduit pas le plan à un point (voir empriseACadrer).
+    cadrage: empriseACadrer(scene.rapport, tampons.emprise),
   };
   rendu?.charger(tampons);
   remplirCalques();
   remplirRapport();
-  $("ensemble").disabled = !tampons.emprise;
+  $("ensemble").disabled = !projet.cadrage;
   vueEnsemble();
   demander();
   const nom = scene.rapport?.maitre || demande.nom;

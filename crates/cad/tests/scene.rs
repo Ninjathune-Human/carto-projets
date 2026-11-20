@@ -26,6 +26,15 @@ fn scene_vide_fait_12_octets_plus_rapport() {
     assert_eq!(o.len(), 16 + n);
     let json: serde_json::Value = serde_json::from_slice(&o[16..]).unwrap();
     assert_eq!(json["maitre"], "");
+    assert!(json["emprise"].is_null(), "emprise absente : null");
+}
+
+#[test]
+fn emprise_du_rapport_en_tableau() {
+    let r = Rapport { emprise: Some([1.0, 2.0, 3.5, 4.0]), ..rapport() };
+    let o = ecrire_scene(&Scene::default(), &r);
+    let json: serde_json::Value = serde_json::from_slice(&o[16..]).unwrap();
+    assert_eq!(json["emprise"], serde_json::json!([1.0, 2.0, 3.5, 4.0]));
 }
 
 #[test]
