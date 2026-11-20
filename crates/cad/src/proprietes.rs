@@ -57,7 +57,11 @@ pub fn resoudre(doc: &CadDocument, e: &EntityCommon, parent: Option<&Herite>) ->
         _ => e.layer.clone(),
     };
     let couche = doc.layers.get(&calque);
+    resoudre_avec(e, parent, calque, couche)
+}
 
+/// Résout les propriétés d'une entité dont le calque effectif `calque` est décrit par `couche`.
+pub(crate) fn resoudre_avec(e: &EntityCommon, parent: Option<&Herite>, calque: String, couche: Option<&Layer>) -> Herite {
     let couleur = match e.color {
         Color::ByLayer => couleur_calque(couche),
         Color::ByBlock => parent.map_or(NOIR, |p| p.couleur),
@@ -81,10 +85,12 @@ pub fn resoudre(doc: &CadDocument, e: &EntityCommon, parent: Option<&Herite>) ->
 
 /// Faux si le calque est éteint, gelé, non imprimable ou nommé `Defpoints` ; vrai s'il est absent de la table.
 pub fn calque_visible(doc: &CadDocument, nom: &str) -> bool {
-    if nom.eq_ignore_ascii_case("Defpoints") {
-        return false;
-    }
-    doc.layers.get(nom).map_or(true, |l| !l.is_off() && !l.is_frozen() && l.is_plottable)
+    couche_visible(nom, doc.layers.get(nom))
+}
+
+/// Visibilité du calque `nom` décrit par `couche` (`None` : absent de toute table, donc visible).
+pub(crate) fn couche_visible(nom: &str, couche: Option<&Layer>) -> bool {
+    !nom.eq_ignore_ascii_case("Defpoints") && couche.map_or(true, |l| !l.is_off() && !l.is_frozen() && l.is_plottable)
 }
 
 /// Vrai seulement pour un calque gelé de la table.

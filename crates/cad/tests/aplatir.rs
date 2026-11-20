@@ -115,7 +115,7 @@ fn ajouter_calque(doc: &mut CadDocument, nom: &str, eteint: bool, gele: bool) {
 fn aplatir_doc(doc: CadDocument) -> Aplatissement {
     let mut docs = BTreeMap::new();
     docs.insert("plan.dwg".to_string(), doc);
-    aplatir(&Dessins { docs }, "plan.dwg").unwrap()
+    aplatir(&Dessins { docs, ..Dessins::default() }, "plan.dwg").unwrap()
 }
 
 fn proche(a: [f64; 2], b: [f64; 2]) -> bool {
@@ -636,21 +636,23 @@ fn tolerance_d_un_millimetre() {
 }
 
 #[test]
-fn xref_non_resolue_signalee() {
+fn xref_introuvable_signalee() {
     let mut doc = CadDocument::new();
     definir_bloc(&mut doc, "TOPO", Vector3::ZERO, vec![ligne(0., 0., 1., 0., "0")]);
-    doc.block_records.get_mut("TOPO").unwrap().flags.is_xref = true;
+    let br = doc.block_records.get_mut("TOPO").unwrap();
+    br.flags.is_xref = true;
+    br.xref_path = r"Fonds\topo.dwg".into();
     inserer(&mut doc, Insert::new("TOPO", Vector3::ZERO));
     let r = aplatir_doc(doc);
     assert!(r.scene.primitives.is_empty());
-    assert_eq!(r.rapport.avertissements, vec!["xréf non résolue : TOPO".to_string()]);
+    assert_eq!(r.rapport.avertissements, vec![r"xréf introuvable : Fonds\topo.dwg".to_string()]);
 }
 
 #[test]
 fn rapport_et_maitre_inconnu() {
     let mut docs = BTreeMap::new();
     docs.insert("plan.dwg".to_string(), CadDocument::new());
-    let dessins = Dessins { docs };
+    let dessins = Dessins { docs, ..Dessins::default() };
     let r = aplatir(&dessins, "plan.dwg").unwrap();
     assert_eq!(r.rapport.maitre, "plan.dwg");
     assert_eq!(r.rapport.dessins, vec!["plan.dwg".to_string()]);

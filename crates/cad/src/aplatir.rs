@@ -1,16 +1,19 @@
-//! Aplatissement d'un dessin : l'espace objet et les blocs insérés deviennent une scène de
-//! traits et de surfaces, en unités du dessin maître, dans l'ordre d'affichage (table SORTENTS de
+//! Aplatissement d'un dessin : l'espace objet, les blocs insérés et les xréfs deviennent une scène
+//! de traits et de surfaces, en unités du dessin maître, dans l'ordre d'affichage (table SORTENTS de
 //! chaque bloc quand elle existe, sinon ordre de la base), XCLIP et visibilité dynamique appliqués.
+//! Une xréf apporte l'espace objet de son dessin, ses calques nommés `NOMXREF|calque`.
 
 use crate::decoupe::{xclip_de, Zone};
 use crate::geometrie::{arc_points, bande, ellipse_points, renflement_points, spline_points, trianguler};
 use crate::hachures::anneaux_hachure;
+use crate::importer::{est_xref, resoudre_chemin};
 use crate::mesure::nom_de_type;
-use crate::proprietes::{calque_gele, calque_visible, couleur_calque, metres_par_unite, resoudre, Herite};
+use crate::proprietes::{couche_visible, couleur_calque, metres_par_unite, resoudre_avec, Herite};
 use crate::scene::{Primitive, Rapport, Scene};
 use crate::ErreurCad;
-use acadrust::entities::{Insert, Spline};
+use acadrust::entities::{EntityCommon, Insert, Spline};
 use acadrust::objects::{BlockVisibilityParameter, BlockVisibilityState, ObjectType, SortEntitiesTable};
+use acadrust::tables::Layer;
 use acadrust::{BlockRecord, CadDocument, EntityType, Handle, Vector3};
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -24,8 +27,21 @@ const CASES_MAX: usize = 1_000_000;
 const SOMMET_DE_CONTROLE: u8 = 16;
 
 /// Dessins d'un projet, par chemin normalisé dans le ZIP.
+#[derive(Default)]
 pub struct Dessins {
     pub docs: BTreeMap<String, CadDocument>,
+    /// Dessins illisibles, par chemin normalisé, avec la cause.
+    pub illisibles: BTreeMap<String, String>,
+}
+
+impl Dessins {
+    /// Chemins de tous les dessins, lisibles ou non, triés.
+    pub fn chemins(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.docs.keys().chain(self.illisibles.keys()).cloned().collect();
+        v.sort();
+        v.dedup();
+        v
+    }
 }
 
 /// Scène d'un dessin aplati et compte rendu de l'import.
@@ -34,21 +50,30 @@ pub struct Aplatissement {
     pub rapport: Rapport,
 }
 
-/// Aplatit l'espace objet du dessin `maitre` ; les xréfs ne sont pas encore résolues.
+/// Aplatit l'espace objet du dessin `maitre`, xréfs comprises ; les dessins illisibles sont signalés.
 pub fn aplatir(dessins: &Dessins, maitre: &str) -> Result<Aplatissement, ErreurCad> {
-    let doc = dessins.docs.get(maitre).ok_or_else(|| ErreurCad::MaitreInconnu(maitre.to_string()))?;
+    if let Some(cause) = dessins.illisibles.get(maitre) {
+        return Err(ErreurCad::Dwg(format!("{maitre} : {cause}")));
+    }
+    let (chemin, doc) = dessins.docs.get_key_value(maitre).ok_or_else(|| ErreurCad::MaitreInconnu(maitre.to_string()))?;
+    let avertissements = dessins.illisibles.iter().map(|(c, cause)| format!("dessin illisible : {c} ({cause})")).collect();
+    let cx = Contexte { chemin, doc, xref: None };
     let mut p = Parcours {
-        doc,
+        dessins,
+        maitre: doc,
+        chemins: dessins.chemins(),
         tol: 0.001 / metres_par_unite(doc.header.insertion_units),
         scene: Scene::default(),
-        rapport: Rapport { maitre: maitre.to_string(), dessins: vec![maitre.to_string()], ..Rapport::default() },
+        rapport: Rapport { maitre: maitre.to_string(), dessins: dessins.chemins(), avertissements, ..Rapport::default() },
         inclinees: 0,
         zone: None,
-        tables: tables_sortents(doc),
+        tables: HashMap::from([(chemin.as_str(), tables_sortents(doc))]),
+        calques_xref: HashMap::new(),
+        pile: vec![chemin.as_str()],
     };
     if let Some(espace_objet) = doc.block_records.get("*Model_Space") {
-        for e in p.contenu(espace_objet) {
-            p.entite(e, &Affine::IDENTITE, None, 0);
+        for e in p.contenu(cx, espace_objet) {
+            p.entite(cx, e, &Affine::IDENTITE, None, 0);
         }
     }
     if p.inclinees > 0 {
@@ -279,8 +304,30 @@ fn masquees_par_visibilite(doc: &CadDocument, i: &Insert, br: &BlockRecord) -> H
     gouvernees.filter(|h| !visibles.contains(h)).copied().collect()
 }
 
-struct Parcours<'a> {
+/// Rapport des unités d'une xréf à celles de son hôte ; 1 si l'un des deux est sans unité (INSUNITS 0),
+/// cas où AutoCAD ne convertit pas.
+fn facteur_unites(xref: &CadDocument, hote: &CadDocument) -> f64 {
+    match (xref.header.insertion_units, hote.header.insertion_units) {
+        (0, _) | (_, 0) => 1.,
+        (x, h) => metres_par_unite(x) / metres_par_unite(h),
+    }
+}
+
+/// Dessin en cours de parcours : le maître ou une xréf.
+#[derive(Clone, Copy)]
+struct Contexte<'a> {
+    chemin: &'a str,
     doc: &'a CadDocument,
+    /// Nom de la xréf dans son hôte, préfixe de ses calques ; `None` dans le maître.
+    xref: Option<&'a str>,
+}
+
+struct Parcours<'a> {
+    dessins: &'a Dessins,
+    /// Dessin ouvert : sa table des calques porte les surcharges des calques de xréfs (VISRETAIN).
+    maitre: &'a CadDocument,
+    /// Chemins de tous les dessins de l'archive, pour résoudre les xréfs.
+    chemins: Vec<String>,
     /// Tolérance de corde en unités du dessin maître.
     tol: f64,
     scene: Scene,
@@ -288,24 +335,57 @@ struct Parcours<'a> {
     inclinees: u64,
     /// Zone visible des XCLIP englobants, dans le repère du maître ; `None` : pas de découpe.
     zone: Option<Zone>,
-    /// Table SORTENTS de chaque bloc, par identifiant de bloc.
-    tables: HashMap<Handle, &'a SortEntitiesTable>,
+    /// Tables SORTENTS de chaque dessin parcouru (par chemin), par identifiant de bloc.
+    tables: HashMap<&'a str, HashMap<Handle, &'a SortEntitiesTable>>,
+    /// Calque d'origine, dans sa xréf, de chaque calque `NOMXREF|calque` rencontré.
+    calques_xref: HashMap<String, Option<&'a Layer>>,
+    /// Dessins ouverts, du maître à la xréf en cours : un dessin déjà ouvert ferme un cycle.
+    pile: Vec<&'a str>,
 }
 
 impl<'a> Parcours<'a> {
     /// Entités d'un bloc dans l'ordre d'affichage : clés croissantes de sa table SORTENTS quand elle
     /// existe (une entité absente de la table, ou à clé nulle, a pour clé son propre identifiant ;
     /// à clé égale, ordre de la base), sinon ordre de la base.
-    fn contenu(&self, br: &BlockRecord) -> Vec<&'a EntityType> {
-        let doc = self.doc;
+    fn contenu(&self, cx: Contexte<'a>, br: &BlockRecord) -> Vec<&'a EntityType> {
+        let doc = cx.doc;
         let mut v: Vec<&'a EntityType> = br.entity_handles.iter().filter_map(|h| doc.get_entity(*h)).collect();
-        if let Some(t) = self.tables.get(&br.handle) {
+        if let Some(t) = self.tables.get(cx.chemin).and_then(|t| t.get(&br.handle)) {
             v.sort_by_key(|e| {
                 let h = e.common().handle;
                 t.get_sort_handle(h).filter(|c| !c.is_null()).unwrap_or(h)
             });
         }
         v
+    }
+
+    /// Nom dans la scène du calque `nom` du dessin `cx` : `NOMXREF|calque` dans une xréf, sauf pour
+    /// les calques `0` et `Defpoints`, communs à tous les dessins ; tel quel dans le maître.
+    fn nom_calque(&mut self, cx: Contexte<'a>, nom: &str) -> String {
+        match cx.xref {
+            Some(x) if nom != "0" && !nom.eq_ignore_ascii_case("Defpoints") => {
+                let n = format!("{x}|{nom}");
+                self.calques_xref.entry(n.clone()).or_insert_with(|| cx.doc.layers.get(nom));
+                n
+            }
+            _ => nom.to_string(),
+        }
+    }
+
+    /// Calque de la scène tel que le maître le décrit (surcharges VISRETAIN des calques de xréfs),
+    /// sinon tel que sa xréf d'origine le décrit.
+    fn couche(&self, nom: &str) -> Option<&'a Layer> {
+        self.maitre.layers.get(nom).or_else(|| self.calques_xref.get(nom).copied().flatten())
+    }
+
+    /// Propriétés effectives d'une entité du dessin `cx`.
+    fn herite(&mut self, cx: Contexte<'a>, commun: &EntityCommon, parent: Option<&Herite>) -> Herite {
+        let calque = match parent {
+            Some(p) if commun.layer == "0" => p.calque.clone(),
+            _ => self.nom_calque(cx, &commun.layer),
+        };
+        let couche = self.couche(&calque);
+        resoudre_avec(commun, parent, calque, couche)
     }
 
     fn avertir(&mut self, message: String) {
@@ -321,8 +401,9 @@ impl<'a> Parcours<'a> {
         }
     }
 
-    /// Une entité placée par `repere` (repère du bloc vers repère du maître) ; `parent` est l'insertion englobante.
-    fn entite(&mut self, e: &EntityType, repere: &Affine, parent: Option<&Herite>, profondeur: usize) {
+    /// Une entité du dessin `cx` placée par `repere` (repère du bloc vers repère du maître) ; `parent`
+    /// est l'insertion englobante.
+    fn entite(&mut self, cx: Contexte<'a>, e: &'a EntityType, repere: &Affine, parent: Option<&Herite>, profondeur: usize) {
         let commun = e.common();
         match e {
             _ if commun.invisible => return,
@@ -331,11 +412,11 @@ impl<'a> Parcours<'a> {
             EntityType::AttributeDefinition(a) if parent.is_some() && !a.flags.constant => return,
             _ => {}
         }
-        let h = resoudre(self.doc, commun, parent);
+        let h = self.herite(cx, commun, parent);
         if let EntityType::Insert(i) = e {
-            return self.insertion(i, &h, repere, profondeur);
+            return self.insertion(cx, i, &h, repere, profondeur);
         }
-        if !calque_visible(self.doc, &h.calque) {
+        if !couche_visible(&h.calque, self.couche(&h.calque)) {
             return;
         }
         let normale = match e {
@@ -439,7 +520,7 @@ impl<'a> Parcours<'a> {
                     if let Some(g) = hh.gradient_color.colors.first() {
                         let mut c = commun.clone();
                         c.color = g.color;
-                        couleur = resoudre(self.doc, &c, parent).couleur;
+                        couleur = self.herite(cx, &c, parent).couleur;
                     }
                 } else if !hh.is_solid {
                     return self.ignorer(e);
@@ -472,7 +553,7 @@ impl<'a> Parcours<'a> {
         if morceaux.is_empty() {
             return;
         }
-        let calque = self.scene.calque(&h.calque, couleur_calque(self.doc.layers.get(&h.calque)));
+        let calque = self.scene.calque(&h.calque, couleur_calque(self.couche(&h.calque)));
         let couleur = [couleur[0], couleur[1], couleur[2], h.alpha];
         for points in morceaux {
             self.scene.primitives.push(if surface {
@@ -483,18 +564,42 @@ impl<'a> Parcours<'a> {
         }
     }
 
+    /// Dessin désigné par la xréf `br` du dessin `cx`, ou `None` si elle n'est pas chargée : superposition
+    /// sous une autre xréf (AutoCAD ne la charge que rattachée directement au maître), xréf déchargée,
+    /// fichier introuvable ou illisible (déjà signalé), cycle.
+    fn ouvrir_xref(&mut self, cx: Contexte<'a>, br: &'a BlockRecord) -> Option<Contexte<'a>> {
+        if br.flags.is_xref_overlay && cx.xref.is_some() {
+            return None;
+        }
+        if br.flags.is_xref_unloaded {
+            self.avertir(format!("xréf déchargée : {}", br.name));
+            return None;
+        }
+        let Some(chemin) = resoudre_chemin(&br.xref_path, cx.chemin, &self.chemins) else {
+            let enregistre = if br.xref_path.is_empty() { &br.name } else { &br.xref_path };
+            self.avertir(format!("xréf introuvable : {enregistre}"));
+            return None;
+        };
+        let (chemin, doc) = self.dessins.docs.get_key_value(&chemin)?;
+        if let Some(k) = self.pile.iter().position(|c| *c == chemin.as_str()) {
+            let boucle: Vec<&str> = self.pile[k..].iter().copied().chain([chemin.as_str()]).collect();
+            self.avertir(format!("cycle de xréfs : {}", boucle.join(" → ")));
+            return None;
+        }
+        self.tables.entry(chemin.as_str()).or_insert_with(|| tables_sortents(doc));
+        Some(Contexte { chemin, doc, xref: Some(br.name.as_str()) })
+    }
+
     /// INSERT et MINSERT : `T(insertion) · R(rotation) · T(c · espacement, r · espacement) · S(échelles) · T(−base)`,
     /// précédé du miroir x → −x si la normale est −Z. Le contenu suit l'ordre d'affichage du bloc, privé
-    /// des entités masquées par l'état de visibilité courant, et découpé par l'XCLIP de l'INSERT.
-    fn insertion(&mut self, i: &Insert, h: &Herite, repere: &Affine, profondeur: usize) {
-        let doc = self.doc;
-        if calque_gele(doc, &h.calque) {
+    /// des entités masquées par l'état de visibilité courant, et découpé par l'XCLIP de l'INSERT. Une
+    /// xréf apporte l'espace objet de son dessin, de point de base son INSBASE, mis à l'échelle du
+    /// rapport de ses unités à celles de son hôte.
+    fn insertion(&mut self, cx: Contexte<'a>, i: &Insert, h: &Herite, repere: &Affine, profondeur: usize) {
+        if self.couche(&h.calque).is_some_and(|l| l.is_frozen()) {
             return;
         }
-        let Some(br) = doc.block_records.get(&i.block_name) else { return };
-        if br.flags.is_xref || br.flags.is_xref_overlay || !br.xref_path.is_empty() {
-            return self.avertir(format!("xréf non résolue : {}", i.block_name));
-        }
+        let Some(br) = cx.doc.block_records.get(&i.block_name) else { return };
         if profondeur >= PROFONDEUR_MAX {
             return self.avertir(format!("imbrication de blocs trop profonde : {}", i.block_name));
         }
@@ -510,19 +615,33 @@ impl<'a> Parcours<'a> {
         if usize::from(colonnes) * usize::from(lignes) > CASES_MAX {
             return self.avertir(format!("réseau MINSERT trop grand, ignoré : {}", i.block_name));
         }
-        let base = match doc.get_entity(br.block_entity_handle) {
-            Some(EntityType::Block(b)) => b.base_point,
-            _ => br.base_point,
+        let xref = est_xref(br);
+        let (cible, bloc, base, unites) = if xref {
+            let Some(cible) = self.ouvrir_xref(cx, br) else { return };
+            let Some(espace_objet) = cible.doc.block_records.get("*Model_Space") else { return };
+            let base = cible.doc.header.model_space_insertion_base;
+            (cible, espace_objet, base, facteur_unites(cible.doc, cx.doc))
+        } else {
+            let base = match cx.doc.get_entity(br.block_entity_handle) {
+                Some(EntityType::Block(b)) => b.base_point,
+                _ => br.base_point,
+            };
+            (cx, br, base, 1.)
         };
         let tete = repere
             .fois(&miroir)
             .fois(&Affine::translation(i.insert_point.x, i.insert_point.y))
             .fois(&Affine::rotation(i.rotation));
-        let pied = Affine::echelle(i.x_scale(), i.y_scale()).fois(&Affine::translation(-base.x, -base.y));
-        let mut contenu = self.contenu(br);
-        let masquees = masquees_par_visibilite(doc, i, br);
-        contenu.retain(|e| !masquees.contains(&e.common().handle));
-        let decoupe = xclip_de(doc, i);
+        let pied = Affine::echelle(i.x_scale() * unites, i.y_scale() * unites).fois(&Affine::translation(-base.x, -base.y));
+        let mut contenu = self.contenu(cible, bloc);
+        if !xref {
+            let masquees = masquees_par_visibilite(cx.doc, i, br);
+            contenu.retain(|e| !masquees.contains(&e.common().handle));
+        }
+        let decoupe = xclip_de(cx.doc, i);
+        if xref {
+            self.pile.push(cible.chemin);
+        }
         for r in 0..lignes {
             for c in 0..colonnes {
                 let case = Affine::translation(f64::from(c) * i.column_spacing, f64::from(r) * i.row_spacing);
@@ -535,12 +654,15 @@ impl<'a> Parcours<'a> {
                     None => None,
                 };
                 for e in &contenu {
-                    self.entite(e, &t, Some(h), profondeur + 1);
+                    self.entite(cible, e, &t, Some(h), profondeur + 1);
                 }
                 if let Some(z) = englobante {
                     self.zone = z;
                 }
             }
+        }
+        if xref {
+            self.pile.pop();
         }
     }
 }

@@ -11,4 +11,8 @@ pub enum ErreurCad {
     EntreeAbsente(String),
     #[error("dessin maître inconnu : {0}")]
     MaitreInconnu(String),
+    #[error("aucun dessin DWG dans l'archive")]
+    AucunDwg,
+    #[error("plusieurs dessins maîtres possibles : {}", .0.join(", "))]
+    PlusieursMaitres(Vec<String>),
 }
