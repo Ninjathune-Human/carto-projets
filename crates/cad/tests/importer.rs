@@ -58,6 +58,11 @@ struct Attache {
 
 /// Rattache la xréf `nom` (fichier enregistré `chemin`) et l'insère à l'origine sur `calque`.
 fn attacher(doc: &mut CadDocument, nom: &str, chemin: &str, a: Attache, calque: &str) {
+    attacher_a_l_echelle(doc, nom, chemin, a, calque, 1.);
+}
+
+/// Idem, avec l'échelle d'INSERT qu'AutoCAD enregistre (conversion d'unités comprise).
+fn attacher_a_l_echelle(doc: &mut CadDocument, nom: &str, chemin: &str, a: Attache, calque: &str, echelle: f64) {
     let mut record = BlockRecord::new(nom);
     record.handle = doc.allocate_handle();
     record.flags.is_xref = !a.superposition;
@@ -71,7 +76,7 @@ fn attacher(doc: &mut CadDocument, nom: &str, chemin: &str, a: Attache, calque: 
     let h = doc.add_entity(EntityType::Block(bloc)).unwrap();
     doc.block_records.get_mut(nom).unwrap().block_entity_handle = h;
     declarer_calque(doc, calque);
-    let mut i = Insert::new(nom, Vector3::ZERO);
+    let mut i = Insert::new(nom, Vector3::ZERO).with_scale(echelle, echelle, echelle);
     i.common.layer = calque.into();
     doc.add_entity(EntityType::Insert(i)).unwrap();
 }
@@ -159,8 +164,9 @@ fn resolution_chemins() {
 
 #[test]
 fn xref_en_m_dans_maitre_en_cm() {
+    // AutoCAD enregistre la conversion d'unités dans l'échelle de l'INSERT : 1 m = 100 cm.
     let mut plan = dessin(5, vec![]);
-    attacher(&mut plan, "TOPO", "topo.dwg", Attache::default(), "FOND");
+    attacher_a_l_echelle(&mut plan, "TOPO", "topo.dwg", Attache::default(), "FOND", 100.);
     let topo = dessin(6, vec![ligne(0., 0., 1., 0., "Bord"), ligne(0., 0., 0., 1., "0")]);
     let z = zip_de(&[("plan.dwg", dwg(&plan)), ("topo.dwg", dwg(&topo))]);
     let r = importer_zip(&z, None).unwrap();
@@ -174,6 +180,18 @@ fn xref_en_m_dans_maitre_en_cm() {
     // Le calque 0 de la xréf prend le calque de l'insertion, comme dans un bloc.
     assert_eq!(t[1].0, "FOND");
     assert!(proche(t[1].1[1], [0., 100.]), "{:?}", t[1].1);
+}
+
+#[test]
+fn xref_echelle_un_sans_facteur() {
+    // Aucun second facteur d'unités : une xréf en m insérée à l'échelle 1 dans un maître en cm garde ses valeurs.
+    let mut plan = dessin(5, vec![]);
+    attacher(&mut plan, "TOPO", "topo.dwg", Attache::default(), "0");
+    let topo = dessin(6, vec![ligne(0., 0., 1., 0., "Bord")]);
+    let z = zip_de(&[("plan.dwg", dwg(&plan)), ("topo.dwg", dwg(&topo))]);
+    let t = traits(&importer_zip(&z, None).unwrap());
+    assert_eq!(t.len(), 1);
+    assert!(proche(t[0].1[0], [0., 0.]) && proche(t[0].1[1], [1., 0.]), "{:?}", t[0].1);
 }
 
 #[test]

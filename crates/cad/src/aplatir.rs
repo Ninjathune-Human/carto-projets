@@ -304,15 +304,6 @@ fn masquees_par_visibilite(doc: &CadDocument, i: &Insert, br: &BlockRecord) -> H
     gouvernees.filter(|h| !visibles.contains(h)).copied().collect()
 }
 
-/// Rapport des unités d'une xréf à celles de son hôte ; 1 si l'un des deux est sans unité (INSUNITS 0),
-/// cas où AutoCAD ne convertit pas.
-fn facteur_unites(xref: &CadDocument, hote: &CadDocument) -> f64 {
-    match (xref.header.insertion_units, hote.header.insertion_units) {
-        (0, _) | (_, 0) => 1.,
-        (x, h) => metres_par_unite(x) / metres_par_unite(h),
-    }
-}
-
 /// Dessin en cours de parcours : le maître ou une xréf.
 #[derive(Clone, Copy)]
 struct Contexte<'a> {
@@ -593,8 +584,8 @@ impl<'a> Parcours<'a> {
     /// INSERT et MINSERT : `T(insertion) · R(rotation) · T(c · espacement, r · espacement) · S(échelles) · T(−base)`,
     /// précédé du miroir x → −x si la normale est −Z. Le contenu suit l'ordre d'affichage du bloc, privé
     /// des entités masquées par l'état de visibilité courant, et découpé par l'XCLIP de l'INSERT. Une
-    /// xréf apporte l'espace objet de son dessin, de point de base son INSBASE, mis à l'échelle du
-    /// rapport de ses unités à celles de son hôte.
+    /// xréf apporte l'espace objet de son dessin, de point de base son INSBASE ; la conversion d'unités
+    /// est déjà dans l'échelle de l'INSERT (AutoCAD l'y inscrit au rattachement), rien ne s'y ajoute.
     fn insertion(&mut self, cx: Contexte<'a>, i: &Insert, h: &Herite, repere: &Affine, profondeur: usize) {
         if self.couche(&h.calque).is_some_and(|l| l.is_frozen()) {
             return;
@@ -616,23 +607,22 @@ impl<'a> Parcours<'a> {
             return self.avertir(format!("réseau MINSERT trop grand, ignoré : {}", i.block_name));
         }
         let xref = est_xref(br);
-        let (cible, bloc, base, unites) = if xref {
+        let (cible, bloc, base) = if xref {
             let Some(cible) = self.ouvrir_xref(cx, br) else { return };
             let Some(espace_objet) = cible.doc.block_records.get("*Model_Space") else { return };
-            let base = cible.doc.header.model_space_insertion_base;
-            (cible, espace_objet, base, facteur_unites(cible.doc, cx.doc))
+            (cible, espace_objet, cible.doc.header.model_space_insertion_base)
         } else {
             let base = match cx.doc.get_entity(br.block_entity_handle) {
                 Some(EntityType::Block(b)) => b.base_point,
                 _ => br.base_point,
             };
-            (cx, br, base, 1.)
+            (cx, br, base)
         };
         let tete = repere
             .fois(&miroir)
             .fois(&Affine::translation(i.insert_point.x, i.insert_point.y))
             .fois(&Affine::rotation(i.rotation));
-        let pied = Affine::echelle(i.x_scale() * unites, i.y_scale() * unites).fois(&Affine::translation(-base.x, -base.y));
+        let pied = Affine::echelle(i.x_scale(), i.y_scale()).fois(&Affine::translation(-base.x, -base.y));
         let mut contenu = self.contenu(cible, bloc);
         if !xref {
             let masquees = masquees_par_visibilite(cx.doc, i, br);
