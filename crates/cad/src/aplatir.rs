@@ -19,7 +19,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::f64::consts::TAU;
 
-/// Garde contre les blocs qui s'insèrent eux-mêmes.
+/// Garde contre une imbrication de blocs démesurée (les blocs récursifs sont arrêtés par la pile).
 const PROFONDEUR_MAX: usize = 16;
 /// Garde contre les réseaux MINSERT démesurés (même borne qu'acadrust).
 const CASES_MAX: usize = 1_000_000;
@@ -77,6 +77,7 @@ pub fn aplatir_avec_tolerance(dessins: &Dessins, maitre: &str, tolerance: Option
         tables: HashMap::from([(chemin.as_str(), tables_sortents(doc))]),
         calques_xref: HashMap::new(),
         pile: vec![chemin.as_str()],
+        blocs: Vec::new(),
     };
     if let Some(espace_objet) = doc.block_records.get("*Model_Space") {
         for e in p.contenu(cx, espace_objet) {
@@ -344,6 +345,8 @@ struct Parcours<'a> {
     calques_xref: HashMap<String, Option<&'a Layer>>,
     /// Dessins ouverts, du maître à la xréf en cours : un dessin déjà ouvert ferme un cycle.
     pile: Vec<&'a str>,
+    /// Blocs en cours de développement : un bloc déjà sur la pile ne l'est pas de nouveau.
+    blocs: Vec<&'a BlockRecord>,
 }
 
 impl<'a> Parcours<'a> {
@@ -603,7 +606,12 @@ impl<'a> Parcours<'a> {
         if self.couche(&h.calque).is_some_and(|l| l.is_frozen()) {
             return;
         }
-        let Some(br) = cx.doc.block_records.get(&i.block_name) else { return };
+        let Some(br) = cx.doc.block_records.get(&i.block_name) else {
+            return self.avertir(format!("Bloc introuvable : {}", i.block_name));
+        };
+        if self.blocs.iter().any(|b| std::ptr::eq(*b, br)) {
+            return self.avertir(format!("Bloc récursif ignoré : {}", i.block_name));
+        }
         if profondeur >= PROFONDEUR_MAX {
             return self.avertir(format!("imbrication de blocs trop profonde : {}", i.block_name));
         }
@@ -644,6 +652,8 @@ impl<'a> Parcours<'a> {
         let decoupe = xclip_de(cx.doc, i);
         if xref {
             self.pile.push(cible.chemin);
+        } else {
+            self.blocs.push(br);
         }
         for r in 0..lignes {
             for c in 0..colonnes {
@@ -673,6 +683,8 @@ impl<'a> Parcours<'a> {
         }
         if xref {
             self.pile.pop();
+        } else {
+            self.blocs.pop();
         }
     }
 }

@@ -300,6 +300,42 @@ fn bloc_rotation_echelle_base() {
 }
 
 #[test]
+fn bloc_introuvable_signale() {
+    let mut doc = CadDocument::new();
+    inserer(&mut doc, Insert::new("Absent", Vector3::ZERO));
+    doc.add_entity(ligne(0., 0., 1., 0., "0")).unwrap();
+    let r = aplatir_doc(doc);
+    assert_eq!(traits(&r).len(), 1);
+    assert_eq!(r.rapport.avertissements, ["Bloc introuvable : Absent"]);
+}
+
+#[test]
+fn bloc_recursif_ignore() {
+    // R s'insère lui-même : son contenu est dessiné une fois par insertion, l'insertion intérieure
+    // est ignorée (et non répétée jusqu'à la profondeur maximale).
+    let mut doc = CadDocument::new();
+    definir_bloc(&mut doc, "R", Vector3::ZERO, vec![ligne(0., 0., 1., 0., "0"), EntityType::Insert(Insert::new("R", Vector3::new(0., 1., 0.)))]);
+    inserer(&mut doc, Insert::new("R", Vector3::ZERO));
+    inserer(&mut doc, Insert::new("R", Vector3::new(10., 0., 0.)));
+    let r = aplatir_doc(doc);
+    let t = traits(&r);
+    assert_eq!(t.len(), 2, "{t:?}");
+    assert!(points_proches(t[0], &[[0., 0.], [1., 0.]]) && points_proches(t[1], &[[10., 0.], [11., 0.]]), "{t:?}");
+    assert_eq!(r.rapport.avertissements, ["Bloc récursif ignoré : R"]);
+}
+
+#[test]
+fn blocs_mutuellement_recursifs() {
+    let mut doc = CadDocument::new();
+    definir_bloc(&mut doc, "A", Vector3::ZERO, vec![ligne(0., 0., 1., 0., "0"), EntityType::Insert(Insert::new("B", Vector3::ZERO))]);
+    definir_bloc(&mut doc, "B", Vector3::ZERO, vec![ligne(0., 5., 1., 5., "0"), EntityType::Insert(Insert::new("A", Vector3::ZERO))]);
+    inserer(&mut doc, Insert::new("A", Vector3::ZERO));
+    let r = aplatir_doc(doc);
+    assert_eq!(traits(&r).len(), 2, "{:?}", traits(&r));
+    assert_eq!(r.rapport.avertissements, ["Bloc récursif ignoré : A"]);
+}
+
+#[test]
 fn bloc_miroir_echelle_negative() {
     let mut doc = CadDocument::new();
     let arc = Arc::from_coords(0., 0., 0., 1., 0., FRAC_PI_2);
@@ -751,8 +787,10 @@ fn bloc_auto_insere_sans_panique() {
     doc.add_entity(EntityType::Insert(i)).unwrap();
     inserer(&mut doc, Insert::new("R", Vector3::ZERO));
     let r = aplatir_doc(doc);
-    assert_eq!(traits(&r).len(), 16);
-    assert_eq!(r.rapport.avertissements.len(), 1, "{:?}", r.rapport.avertissements);
+    // La pile des blocs arrête la récursion dès sa première répétition (16 copies auparavant,
+    // jusqu'à la profondeur maximale).
+    assert_eq!(traits(&r).len(), 1);
+    assert_eq!(r.rapport.avertissements, ["Bloc récursif ignoré : R"]);
 }
 
 // --- XCLIP ---
