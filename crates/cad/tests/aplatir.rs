@@ -462,6 +462,58 @@ fn polyligne_a_renflement_fermee() {
     assert!(t[0].iter().all(|q| ((q[0] - 5.).hypot(q[1]) - 5.).abs() < 1e-9));
 }
 
+fn lwpolyligne(sommets: &[(f64, f64, f64, f64)]) -> LwPolyline {
+    let mut p = LwPolyline::new();
+    for &(x, y, l0, l1) in sommets {
+        let mut v = LwVertex::new(Vector2::new(x, y));
+        v.start_width = l0;
+        v.end_width = l1;
+        p.vertices.push(v);
+    }
+    p
+}
+
+#[test]
+fn fleche_tige_fine_tete_effilee() {
+    let mut doc = CadDocument::new();
+    let p = lwpolyligne(&[(0., 0., 0., 0.), (10., 0., 1., 0.), (12., 0., 0., 0.)]);
+    doc.add_entity(EntityType::LwPolyline(p)).unwrap();
+    let r = aplatir_doc(doc);
+    let p = &r.scene.primitives;
+    assert_eq!(p.len(), 2, "{p:?}");
+    let Primitive::Trait { points, .. } = &p[0] else { panic!("tige : {:?}", p[0]) };
+    assert!(points_proches(points, &[[0., 0.], [10., 0.]]), "{points:?}");
+    let Primitive::Surface { triangles, .. } = &p[1] else { panic!("tête : {:?}", p[1]) };
+    assert!((aire_triangles(triangles) - 1.).abs() < 1e-9);
+}
+
+#[test]
+fn largeur_du_dernier_sommet_ignoree() {
+    let mut doc = CadDocument::new();
+    let p = lwpolyligne(&[(0., 0., 0., 0.), (10., 0., 0., 0.), (20., 0., 1., 1.)]);
+    doc.add_entity(EntityType::LwPolyline(p)).unwrap();
+    let r = aplatir_doc(doc);
+    assert_eq!(r.scene.primitives.len(), 1);
+    let Primitive::Trait { points, .. } = &r.scene.primitives[0] else { panic!("trait attendu") };
+    assert!(points_proches(points, &[[0., 0.], [10., 0.], [20., 0.]]));
+}
+
+#[test]
+fn polyligne_fermee_mixte() {
+    // Carré fermé dont seul le côté droit est large : la suite fine fait le tour par le premier sommet.
+    let mut doc = CadDocument::new();
+    let mut p = lwpolyligne(&[(0., 0., 0., 0.), (10., 0., 2., 2.), (10., 10., 0., 0.), (0., 10., 0., 0.)]);
+    p.is_closed = true;
+    doc.add_entity(EntityType::LwPolyline(p)).unwrap();
+    let r = aplatir_doc(doc);
+    let p = &r.scene.primitives;
+    assert_eq!(p.len(), 2, "{p:?}");
+    let Primitive::Surface { triangles, .. } = &p[0] else { panic!("côté large : {:?}", p[0]) };
+    assert!((aire_triangles(triangles) - 20.).abs() < 1e-9);
+    let Primitive::Trait { points, .. } = &p[1] else { panic!("côtés fins : {:?}", p[1]) };
+    assert!(points_proches(points, &[[10., 10.], [0., 10.], [0., 0.], [10., 0.]]), "{points:?}");
+}
+
 #[test]
 fn polyligne_2d_a_largeur_par_sommet() {
     let mut doc = CadDocument::new();

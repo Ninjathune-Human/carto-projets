@@ -141,37 +141,55 @@ fn fermer(v: &mut [[f64; 2]]) {
     }
 }
 
-/// Polyligne à renflements : `Trait` sans largeur, sinon `Surface` (bande).
-fn polyligne(s: &[Sommet], fermee: bool, tol: f64) -> Option<Forme> {
+/// Polyligne à renflements : chaque suite de segments sans largeur donne un `Trait`, chaque suite
+/// de segments larges une `Surface` (bande). Le segment i prend les largeurs du sommet i.
+fn polyligne(s: &[Sommet], fermee: bool, tol: f64) -> Vec<Forme> {
     let n = s.len();
     if n < 2 {
-        return None;
+        return Vec::new();
     }
-    let mut pts = vec![s[0].p];
-    let mut largeurs = Vec::new();
-    for i in 0..if fermee { n } else { n - 1 } {
-        let (a, b) = (&s[i], &s[(i + 1) % n]);
-        let sous = renflement_points(a.p, b.p, a.renflement, tol);
-        let k = sous.len() as f64;
-        for j in 0..sous.len() {
-            let (t0, t1) = (j as f64 / k, (j + 1) as f64 / k);
-            largeurs.push((a.l0 + (a.l1 - a.l0) * t0, a.l0 + (a.l1 - a.l0) * t1));
+    let nb = if fermee { n } else { n - 1 };
+    let large = |i: usize| s[i].l0 != 0. || s[i].l1 != 0.;
+    let uniforme = (0..nb).all(|i| large(i) == large(0));
+    // Fermée et mixte : on part du début d'une suite pour ne pas la couper au premier sommet.
+    let debut = if fermee && !uniforme { (0..nb).find(|&i| large(i) != large((i + nb - 1) % nb)).unwrap_or(0) } else { 0 };
+    let fermee_entiere = fermee && uniforme;
+    let mut formes = Vec::new();
+    let mut k = 0;
+    while k < nb {
+        let suite_large = large((debut + k) % nb);
+        let mut pts = vec![s[(debut + k) % nb].p];
+        let mut largeurs = Vec::new();
+        while k < nb && large((debut + k) % nb) == suite_large {
+            let i = (debut + k) % nb;
+            let (a, b) = (&s[i], &s[(i + 1) % n]);
+            let sous = renflement_points(a.p, b.p, a.renflement, tol);
+            let q = sous.len() as f64;
+            for j in 0..sous.len() {
+                let (t0, t1) = (j as f64 / q, (j + 1) as f64 / q);
+                largeurs.push((a.l0 + (a.l1 - a.l0) * t0, a.l0 + (a.l1 - a.l0) * t1));
+            }
+            pts.extend(sous);
+            k += 1;
         }
-        pts.extend(sous);
+        formes.push(if !suite_large {
+            Forme::Trait(pts)
+        } else {
+            if fermee_entiere {
+                pts.pop(); // le dernier point est le premier : `bande` ferme elle-même
+            }
+            Forme::Surface(bande(&pts, &largeurs, fermee_entiere))
+        });
     }
-    if s.iter().all(|v| v.l0 == 0. && v.l1 == 0.) {
-        return Some(Forme::Trait(pts));
-    }
-    if fermee {
-        pts.pop(); // le dernier point est le premier : `bande` ferme elle-même
-    }
-    Some(Forme::Surface(bande(&pts, &largeurs, fermee)))
+    formes
 }
 
-/// Largeurs par sommet si l'une est non nulle, sinon largeurs par défaut pour tous les segments.
-fn sommets(v: impl Iterator<Item = ([f64; 2], f64, f64, f64)>, defaut: (f64, f64)) -> Vec<Sommet> {
+/// Largeurs par sommet si l'une des largeurs utilisées est non nulle, sinon largeurs par défaut
+/// pour tous les segments ; le dernier sommet d'une polyligne ouverte ne porte aucun segment.
+fn sommets(v: impl Iterator<Item = ([f64; 2], f64, f64, f64)>, defaut: (f64, f64), fermee: bool) -> Vec<Sommet> {
     let mut s: Vec<Sommet> = v.map(|(p, renflement, l0, l1)| Sommet { p, renflement, l0: l0.abs(), l1: l1.abs() }).collect();
-    if s.iter().all(|v| v.l0 == 0. && v.l1 == 0.) {
+    let utilises = if fermee { s.len() } else { s.len().saturating_sub(1) };
+    if s[..utilises].iter().all(|v| v.l0 == 0. && v.l1 == 0.) {
         for v in &mut s {
             (v.l0, v.l1) = (defaut.0.abs(), defaut.1.abs());
         }
@@ -276,9 +294,11 @@ impl Parcours<'_> {
             }
             EntityType::LwPolyline(p) => {
                 let v = p.vertices.iter().map(|v| ([v.location.x, v.location.y], v.bulge, v.start_width, v.end_width));
-                let s = sommets(v, (p.constant_width, p.constant_width));
-                let Some(f) = polyligne(&s, p.is_closed, tol) else { return };
-                f
+                let s = sommets(v, (p.constant_width, p.constant_width), p.is_closed);
+                for f in polyligne(&s, p.is_closed, tol) {
+                    self.emettre(&h, couleur, f, &m);
+                }
+                return;
             }
             EntityType::Polyline2D(p) => {
                 let v = p
@@ -286,9 +306,11 @@ impl Parcours<'_> {
                     .iter()
                     .filter(|v| v.flags.bits() & SOMMET_DE_CONTROLE == 0)
                     .map(|v| (xy(v.location), v.bulge, v.start_width, v.end_width));
-                let s = sommets(v, (p.start_width, p.end_width));
-                let Some(f) = polyligne(&s, p.is_closed(), tol) else { return };
-                f
+                let s = sommets(v, (p.start_width, p.end_width), p.is_closed());
+                for f in polyligne(&s, p.is_closed(), tol) {
+                    self.emettre(&h, couleur, f, &m);
+                }
+                return;
             }
             EntityType::Polyline3D(p) => {
                 let v = p.vertices.iter().filter(|v| v.flags & i32::from(SOMMET_DE_CONTROLE) == 0);
