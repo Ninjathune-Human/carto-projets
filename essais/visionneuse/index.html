@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Visionneuse de scène</title>
+<style>
+  :root {
+    --fond:#f7f6f2; --encre:#1c1c1a; --gris:#6f6d66; --filet:#d9d6cc; --alerte:#9b2c2c;
+    --plan:#d9d9d9; --trait-plan:#9e9c96;
+    --marge: .75rem;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--plan); color: var(--encre); overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.45; -webkit-font-smoothing: antialiased;
+  }
+
+  /* Vue : le plan seul, ou le plan et la capture côte à côte, ou la capture superposée au plan. */
+  #vue {
+    position: fixed; inset: 0; overflow: hidden; background: var(--plan);
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+    display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr);
+  }
+  #plan {
+    grid-area: 1 / 1; display: block; width: 100%; height: 100%;
+    touch-action: none; cursor: grab; outline: none;
+  }
+  #plan.saisi { cursor: grabbing; }
+  #capture {
+    grid-area: 1 / 1; display: block; width: 100%; height: 100%; min-width: 0; min-height: 0;
+    object-fit: scale-down; object-position: center; pointer-events: none;
+    -webkit-user-select: none; user-select: none;
+  }
+  #capture[hidden] { display: none; }
+  #vue[data-mode="cote"] { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  #vue[data-mode="cote"] #capture { grid-area: 1 / 2; border-left: 1px solid var(--trait-plan); }
+  @media (orientation: portrait) {
+    #vue[data-mode="cote"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+    #vue[data-mode="cote"] #capture { grid-area: 2 / 1; border-left: 0; border-top: 1px solid var(--trait-plan); }
+  }
+  #vue.depot::after {
+    content: ""; position: absolute; inset: .5rem; pointer-events: none;
+    border: 2px dashed #1c1c1a;
+  }
+
+  #panneau {
+    position: fixed; z-index: 10;
+    top: calc(env(safe-area-inset-top, 0px) + var(--marge));
+    left: calc(env(safe-area-inset-left, 0px) + var(--marge));
+    width: min(21rem, calc(100vw - 2 * var(--marge) - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)));
+    max-height: calc(100dvh - 2 * var(--marge) - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+    overflow-y: auto; overscroll-behavior: contain;
+    background: var(--fond); border: 1px solid var(--filet);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, .12);
+    font-size: .9rem; touch-action: manipulation;
+  }
+  .tete { display: flex; align-items: center; gap: .5rem; padding: 0 .75rem 0 0; border-bottom: 1px solid var(--filet); }
+  #encoche {
+    flex: none; width: 44px; height: 44px; padding: 0; border: 0; border-right: 1px solid var(--filet);
+    background: transparent; color: var(--encre); cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .chevron {
+    width: .55rem; height: .55rem; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
+    transform: translateY(-2px) rotate(45deg); transition: transform .2s ease;
+  }
+  #encoche[aria-expanded="false"] .chevron { transform: translateX(-2px) rotate(-45deg); }
+  h1 { flex: 1; margin: 0; font-size: .95rem; font-weight: 500; letter-spacing: -0.01em; }
+  .tete a { color: var(--gris); text-decoration: none; padding: .6rem 0; }
+  .tete a:hover, .tete a:focus-visible { color: var(--encre); }
+
+  #messages { margin: 0; padding: 0; list-style: none; font-variant-numeric: tabular-nums; }
+  #messages li { padding: .45rem .75rem; border-top: 1px solid var(--filet); color: var(--gris); overflow-wrap: anywhere; }
+  #messages li.alerte { color: var(--alerte); }
+  #corps[hidden] + #messages li:first-child { border-top: 0; }
+
+  #corps[hidden] { display: none; }
+  fieldset { margin: 0; padding: .6rem .75rem .75rem; border: 0; border-bottom: 1px solid var(--filet); min-width: 0; }
+  #corps > fieldset:last-child { border-bottom: 0; }
+  legend { padding: 0; margin-bottom: .4rem; color: var(--gris); font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; float: left; width: 100%; }
+  .ligne { display: flex; gap: .5rem; align-items: center; clear: both; }
+  .ligne + .ligne, .ligne + .bascule, .bascule + .ligne { margin-top: .5rem; }
+  .ligne > button, .ligne > label.bouton { flex: 1; }
+  .etiquette { color: var(--gris); }
+  .aide { clear: both; margin: .4rem 0 0; color: var(--gris); font-size: .8rem; }
+  .vide { clear: both; margin: 0; color: var(--gris); }
+
+  button, label.bouton {
+    display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 1rem;
+    border: 1px solid var(--encre); background: transparent; color: var(--encre); font: inherit; cursor: pointer;
+    white-space: nowrap; -webkit-tap-highlight-color: transparent;
+  }
+  button:disabled { opacity: .4; cursor: default; }
+  button:focus-visible { outline: 2px solid var(--encre); outline-offset: 2px; }
+  input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  input[type=file]:focus-visible + label.bouton { outline: 2px solid var(--encre); outline-offset: 2px; }
+
+  .bascule { display: grid; grid-template-columns: 1fr 1fr; clear: both; border: 1px solid var(--encre); }
+  .bascule input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  .bascule label {
+    display: flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 .5rem;
+    cursor: pointer; -webkit-tap-highlight-color: transparent;
+  }
+  .bascule label + input + label { border-left: 1px solid var(--encre); }
+  .bascule input:checked + label { background: var(--encre); color: var(--fond); }
+  .bascule input:focus-visible + label { outline: 2px solid var(--encre); outline-offset: 2px; }
+  .bascule input:disabled + label { opacity: .4; cursor: default; }
+
+  input[type=range] { flex: 1; min-width: 0; min-height: 44px; margin: 0; accent-color: var(--encre); }
+  input[type=range]:disabled { opacity: .4; }
+  output { min-width: 3.2rem; text-align: right; font-variant-numeric: tabular-nums; }
+  .ligne.inactive .etiquette, .ligne.inactive output { opacity: .4; }
+
+  /* Choix du dessin maître */
+  #maitres { clear: both; margin-top: .6rem; }
+  #maitres p { margin: 0 0 .4rem; }
+  #maitres ul { margin: 0; padding: 0; list-style: none; display: grid; gap: .4rem; }
+  #maitres button { width: 100%; justify-content: flex-start; white-space: normal; text-align: left; overflow-wrap: anywhere; padding: .5rem .75rem; }
+
+  /* Calques */
+  #calques {
+    clear: both; margin: 0; padding: 0; list-style: none;
+    max-height: 40vh; overflow-y: auto; overscroll-behavior: contain;
+  }
+  #calques label { display: flex; align-items: center; gap: .6rem; min-height: 44px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  #calques li + li label { border-top: 1px solid var(--filet); }
+  #calques input { flex: none; width: 1.15rem; height: 1.15rem; margin: 0; accent-color: var(--encre); }
+  .pastille { flex: none; width: .9rem; height: .9rem; border: 1px solid var(--trait-plan); }
+  .nom { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.25; }
+
+  /* Rapport */
+  .fiche {
+    clear: both; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .15rem .75rem; margin: 0;
+  }
+  .fiche dt { color: var(--gris); }
+  .fiche dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+  .nombre { font-variant-numeric: tabular-nums; }
+  h2 { clear: both; margin: .7rem 0 .2rem; font-size: .8rem; font-weight: 400; color: var(--gris); }
+  .liste { margin: 0; padding: 0; list-style: none; }
+  .liste li { display: flex; gap: .75rem; justify-content: space-between; padding: .15rem 0; overflow-wrap: anywhere; }
+  .liste li .nombre { flex: none; }
+  .liste.avertissements li { color: var(--alerte); }
+
+  @media (prefers-color-scheme: dark) {
+    :root { --fond:#161614; --encre:#ecebe6; --gris:#9a978e; --filet:#34332f; --alerte:#e08a8a; }
+    #panneau { box-shadow: 0 2px 12px rgba(0, 0, 0, .5); }
+  }
+</style>
+</head>
+<body>
+<div id="vue" data-mode="seul">
+  <canvas id="plan" role="img" aria-label="Plan du projet"></canvas>
+  <img id="capture" alt="Capture d'AutoCAD" hidden>
+</div>
+
+<section id="panneau" aria-label="Commandes de la visionneuse">
+  <div class="tete">
+    <button id="encoche" type="button" aria-expanded="true" aria-controls="corps" title="Replier le panneau">
+      <span class="chevron" aria-hidden="true"></span>
+    </button>
+    <h1>Visionneuse de scène</h1>
+    <a href="../../">Accueil</a>
+  </div>
+
+  <div id="corps">
+    <fieldset>
+      <legend>Projet</legend>
+      <div class="ligne">
+        <input type="file" id="fichier" accept=".zip,application/zip,application/x-zip-compressed">
+        <label class="bouton" for="fichier">Ouvrir un projet (.zip)</label>
+      </div>
+      <div class="ligne">
+        <button id="ensemble" type="button" disabled>Vue d'ensemble</button>
+      </div>
+      <p class="aide">Le ZIP eTransmit peut aussi être déposé sur le plan.</p>
+      <div id="maitres" hidden>
+        <p>Dessin maître à importer :</p>
+        <ul id="liste-maitres"></ul>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Calques</legend>
+      <ul id="calques"><li class="vide">Aucun projet ouvert</li></ul>
+    </fieldset>
+
+    <fieldset>
+      <legend>Rapport</legend>
+      <div id="rapport"><p class="vide">Aucun projet ouvert</p></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Comparaison</legend>
+      <div class="ligne">
+        <input type="file" id="fichier-capture" accept="image/*">
+        <label class="bouton" for="fichier-capture">Ouvrir une capture</label>
+      </div>
+      <div class="bascule" role="radiogroup" aria-label="Disposition de la capture">
+        <input type="radio" name="disposition" id="cote" value="cote" checked disabled>
+        <label for="cote">Côte à côte</label>
+        <input type="radio" name="disposition" id="superpose" value="superpose" disabled>
+        <label for="superpose">Superposé</label>
+      </div>
+      <div class="ligne inactive" id="ligne-opacite">
+        <label class="etiquette" for="opacite">Opacité</label>
+        <input type="range" id="opacite" min="0" max="100" step="1" value="50" disabled>
+        <output id="valeur-opacite" for="opacite">50&#8239;%</output>
+      </div>
+      <p class="aide">La capture reste dans le navigateur : elle n'est envoyée nulle part.</p>
+    </fieldset>
+  </div>
+
+  <ul id="messages" aria-live="polite"></ul>
+</section>
+
+<script type="module" src="visionneuse.js"></script>
+</body>
+</html>
