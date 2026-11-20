@@ -15,24 +15,37 @@ pub(crate) fn est_xref(br: &BlockRecord) -> bool {
     br.flags.is_xref || br.flags.is_xref_overlay || !br.xref_path.is_empty()
 }
 
+/// Taille décompressée maximale d'une entrée du ZIP.
+const TAILLE_MAX: u64 = 1 << 30;
+
 /// Lit tous les `.dwg` du ZIP (extension sans tenir compte de la casse), par chemin normalisé
 /// (séparateur `/`) ; un dessin illisible est rangé à part avec sa cause, sans faire échouer la lecture.
+/// Un DWG chiffré, ou annoncé à plus de 1 Gio, fait échouer la lecture ; la lecture d'une entrée
+/// est bornée à sa taille annoncée.
 pub fn charger_dessins(zip: &[u8]) -> Result<Dessins, ErreurCad> {
     let mut archive = ouvrir(zip)?;
     let mut dessins = Dessins::default();
     for i in 0..archive.len() {
-        let chemin = {
+        let (chemin, taille, chiffree) = {
             let entree = archive.by_index_raw(i).map_err(|e| ErreurCad::Zip(e.to_string()))?;
             if entree.is_dir() {
                 continue;
             }
-            normaliser(&nom_de(&entree)?)
+            (normaliser(&nom_de(&entree)?), entree.size(), entree.encrypted())
         };
         if !chemin.rsplit_once('.').is_some_and(|(_, e)| e.eq_ignore_ascii_case("dwg")) {
             continue;
         }
+        if chiffree {
+            return Err(ErreurCad::ZipChiffre);
+        }
+        if taille > TAILLE_MAX {
+            return Err(ErreurCad::EntreeTropGrande(chemin));
+        }
+        // Un octet de plus que l'annonce suffit à voir qu'elle est dépassée.
         let mut octets = Vec::new();
-        let lu = match archive.by_index(i).map(|mut e| e.read_to_end(&mut octets)) {
+        let lu = match archive.by_index(i).map(|e| e.take(taille + 1).read_to_end(&mut octets)) {
+            Ok(Ok(n)) if n as u64 > taille => Err("archive : entrée plus grande que sa taille annoncée".to_string()),
             Ok(Ok(_)) => lire_document(&octets).map_err(|e| match e {
                 ErreurCad::Dwg(m) => m,
                 autre => autre.to_string(),

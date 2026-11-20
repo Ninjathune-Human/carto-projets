@@ -15,4 +15,8 @@ pub enum ErreurCad {
     AucunDwg,
     #[error("plusieurs dessins maîtres possibles : {}", .0.join(", "))]
     PlusieursMaitres(Vec<String>),
+    #[error("ZIP chiffré : enregistrez l'eTransmit sans mot de passe.")]
+    ZipChiffre,
+    #[error("entrée du ZIP trop grande (plus de 1 Gio) : {0}")]
+    EntreeTropGrande(String),
 }

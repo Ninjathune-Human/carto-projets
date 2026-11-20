@@ -329,6 +329,49 @@ mod import {
     }
 
     #[test]
+    fn zip_chiffre_refuse() {
+        use zip::unstable::write::FileOptionsExt;
+        let mut zw = ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default().with_deprecated_encryption(b"secret").unwrap();
+        zw.start_file("plan.dwg", options).unwrap();
+        zw.write_all(&dwg(&NICE)).unwrap();
+        let z = zw.finish().unwrap().into_inner();
+        let v: serde_json::Value = serde_json::from_str(&importer_zip_scn(&z, Repere::L93, None).unwrap_err()).unwrap();
+        assert_eq!(v["code"], "lecture");
+        assert_eq!(v["message"], "ZIP chiffré : enregistrez l'eTransmit sans mot de passe.");
+    }
+
+    /// Remplace la taille décompressée annoncée de la première entrée (en-tête local et répertoire central).
+    fn annoncer_taille(z: &mut [u8], taille: u32) {
+        assert_eq!(&z[..4], b"PK\x03\x04");
+        z[22..26].copy_from_slice(&taille.to_le_bytes());
+        let c = z.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
+        z[c + 24..c + 28].copy_from_slice(&taille.to_le_bytes());
+    }
+
+    #[test]
+    fn entree_de_plus_de_1_gio_refusee() {
+        let mut z = zip_de_test(&[("plan.dwg", &dwg(&NICE))]);
+        annoncer_taille(&mut z, (1 << 30) + 1);
+        let v: serde_json::Value = serde_json::from_str(&importer_zip_scn(&z, Repere::L93, None).unwrap_err()).unwrap();
+        assert_eq!(v["code"], "lecture");
+        assert_eq!(v["message"], "entrée du ZIP trop grande (plus de 1 Gio) : plan.dwg");
+    }
+
+    #[test]
+    fn lecture_bornee_a_la_taille_annoncee() {
+        // Une entrée qui se décompresse au-delà de sa taille annoncée est coupée à cette taille :
+        // le DWG tronqué devient illisible, sans lire plus que ce qui est annoncé.
+        let d = dwg(&NICE);
+        let mut z = zip_de_test(&[("plan.dwg", &d)]);
+        annoncer_taille(&mut z, 100);
+        let v: serde_json::Value = serde_json::from_str(&importer_zip_scn(&z, Repere::L93, None).unwrap_err()).unwrap();
+        assert_eq!(v["code"], "lecture");
+        let m = v["message"].as_str().unwrap();
+        assert!(m.starts_with("DWG illisible : plan.dwg : "), "{m}");
+    }
+
+    #[test]
     fn repere_depuis_texte() {
         assert!(matches!(Repere::depuis("l93"), Some(Repere::L93)));
         assert!(matches!(Repere::depuis("mercator"), Some(Repere::Mercator)));
