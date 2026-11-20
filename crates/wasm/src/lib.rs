@@ -2,7 +2,7 @@
 //! (un piège wasm ne coûte ainsi que le DWG en cours, voir R15).
 
 use carto_cad::{ecrire_scene, importer_zip as importer_zip_cad, inventorier, lire_entree, mesurer, ErreurCad, Mesure, Primitive};
-use carto_georef::{reconnaitre_points, Convertisseur};
+use carto_georef::{reconnaitre_primitives, Convertisseur};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 use web_time::Instant;
@@ -90,8 +90,9 @@ fn lecture(message: impl std::fmt::Display) -> String {
     erreur_json("lecture", &message.to_string())
 }
 
-/// Importe un ZIP eTransmit : aplatissement, reconnaissance du système sur l'emprise essentielle,
-/// conversion de chaque point (dans le repère demandé) puis écriture SCN1.
+/// Importe un ZIP eTransmit : aplatissement, reconnaissance du système par vote des primitives
+/// (au moins 10 % ; un avertissement sous la moitié), conversion de chaque point (dans le repère
+/// demandé) puis écriture SCN1.
 /// L'erreur est une chaîne JSON `{"code", …}`.
 pub fn importer_zip_scn(octets: &[u8], repere: Repere, maitre: Option<&str>) -> Result<Vec<u8>, String> {
     let mut a = importer_zip_cad(octets, maitre).map_err(|e| match e {
@@ -99,9 +100,21 @@ pub fn importer_zip_scn(octets: &[u8], repere: Repere, maitre: Option<&str>) -> 
         ErreurCad::PlusieursMaitres(c) => serde_json::json!({ "code": "plusieurs_maitres", "candidats": c }).to_string(),
         e => lecture(e),
     })?;
-    let points: Vec<[f64; 2]> = a.scene.points_mut().map(|p| *p).collect();
-    let (reco, emprise) = reconnaitre_points(&points)
+    let groupes: Vec<&[[f64; 2]]> = a
+        .scene
+        .primitives
+        .iter()
+        .map(|p| match p {
+            Primitive::Trait { points, .. } => points.as_slice(),
+            Primitive::Surface { triangles, .. } => triangles.as_slice(),
+        })
+        .collect();
+    let (reco, emprise, part) = reconnaitre_primitives(&groupes)
         .ok_or_else(|| erreur_json("non_georeference", MESSAGE_NON_GEOREFERENCE))?;
+    if part < 0.5 {
+        let hors = ((1.0 - part) * 100.0).round() as u32;
+        a.rapport.avertissements.push(format!("Une partie du dessin ({hors} %) est hors de l'emprise du système reconnu."));
+    }
     let facteur = reco.facteur;
     let conv = Convertisseur::nouveau(reco).map_err(lecture)?;
     a.rapport.systeme = Some(reco.systeme.nom().to_string());

@@ -163,13 +163,20 @@ pub fn reconnaitre(emprise: [f64; 4]) -> Option<Reconnaissance> {
     None
 }
 
-/// Reconnaissance à la majorité : le couple (système, facteur) dont le rectangle de la Métropole
-/// contient le plus de points finis (premier dans l'ordre des essais en cas d'égalité), s'il en
-/// contient au moins la moitié. Renvoie aussi l'emprise essentielle des seuls points contenus
-/// (unités du dessin). Les objets égarés (cartouche, cotes d'altitude) ne comptent pas.
-pub fn reconnaitre_points(points: &[[f64; 2]]) -> Option<(Reconnaissance, [f64; 4])> {
-    let finis: Vec<[f64; 2]> = points.iter().copied().filter(|p| p[0].is_finite() && p[1].is_finite()).collect();
-    if finis.is_empty() {
+/// Part minimale des primitives qui doivent voter pour un couple (système, facteur).
+const PART_MIN: f64 = 0.1;
+
+/// Reconnaissance par vote : chaque primitive (suite de points, unités du dessin) vote par son
+/// premier point fini pour le couple (système, facteur) dont le rectangle de la Métropole le
+/// contient. Le couple qui a le plus de voix (premier dans l'ordre des essais en cas d'égalité)
+/// l'emporte s'il en a au moins 10 % ; un cartouche ou des détails en coordonnées locales ne
+/// font donc pas refuser un plan géoréférencé, quel que soit leur nombre de points.
+/// Renvoie le couple, l'emprise essentielle des seuls points contenus dans son rectangle (unités
+/// du dessin) et la part des primitives votantes (0 à 1) qui l'ont choisi.
+pub fn reconnaitre_primitives(primitives: &[&[[f64; 2]]]) -> Option<(Reconnaissance, [f64; 4], f64)> {
+    let fini = |p: &&[f64; 2]| p[0].is_finite() && p[1].is_finite();
+    let voix: Vec<[f64; 2]> = primitives.iter().filter_map(|v| v.iter().find(fini).copied()).collect();
+    if voix.is_empty() {
         return None;
     }
     let rects = rectangles();
@@ -181,19 +188,21 @@ pub fn reconnaitre_points(points: &[[f64; 2]]) -> Option<(Reconnaissance, [f64; 
     for systeme in Systeme::TOUS {
         let r = &rects[systeme.indice()];
         for facteur in FACTEURS {
-            let n = finis.iter().filter(|p| dedans(r, facteur, p)).count();
+            let n = voix.iter().filter(|p| dedans(r, facteur, p)).count();
             if n > meilleur.map_or(0, |(_, m)| m) {
                 meilleur = Some((Reconnaissance { systeme, facteur }, n));
             }
         }
     }
     let (reco, n) = meilleur?;
-    if n * 2 < finis.len() {
+    let part = n as f64 / voix.len() as f64;
+    if part < PART_MIN {
         return None;
     }
     let r = &rects[reco.systeme.indice()];
-    let contenus: Vec<[f64; 2]> = finis.into_iter().filter(|p| dedans(r, reco.facteur, p)).collect();
-    Some((reco, emprise_essentielle(&contenus)?))
+    let contenus: Vec<[f64; 2]> =
+        primitives.iter().flat_map(|v| v.iter()).filter(fini).filter(|p| dedans(r, reco.facteur, p)).copied().collect();
+    Some((reco, emprise_essentielle(&contenus)?, part))
 }
 
 /// Convertisseur d'un système vers Lambert 93 et Web Mercator ; projections analysées une fois.

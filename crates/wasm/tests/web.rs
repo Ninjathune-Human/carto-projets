@@ -164,6 +164,43 @@ mod import {
         assert_eq!(rapport["systeme"], "Lambert 93");
     }
 
+    fn avertissements(rapport: &serde_json::Value) -> Vec<String> {
+        rapport["avertissements"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect()
+    }
+
+    #[test]
+    fn part_hors_emprise_signalee_sous_la_moitie() {
+        // 3 lignes en Lambert 93, 7 près de l'origine : le plan est reconnu (30 % des primitives,
+        // au moins 10 %), avec un avertissement pour les 70 % hors de l'emprise.
+        let mut l: Vec<[f64; 4]> = (0..3).map(|i| [1_042_000. + 10. * i as f64, 6_298_000., 1_042_005. + 10. * i as f64, 6_298_005.]).collect();
+        l.extend((0..7).map(|i| [i as f64, 0., i as f64 + 1., 1.]));
+        let z = zip_de_test(&[("plan.dwg", &dwg(&l))]);
+        let (n, _, rapport) = lire(&importer_zip_scn(&z, Repere::L93, None).unwrap());
+        assert_eq!(n, 10);
+        assert_eq!(rapport["systeme"], "Lambert 93");
+        assert!(
+            avertissements(&rapport).contains(&"Une partie du dessin (70 %) est hors de l'emprise du système reconnu.".to_string()),
+            "{rapport}"
+        );
+        // À la moitié ou plus dans l'emprise, rien n'est signalé.
+        let (_, _, rapport) = lire(&importer_zip_scn(&zip_nice(), Repere::L93, None).unwrap());
+        assert!(avertissements(&rapport).iter().all(|a| !a.starts_with("Une partie du dessin")), "{rapport}");
+        let mut l = NICE.to_vec();
+        l.extend([[0., 0., 1., 1.], [2., 2., 3., 3.]]);
+        let z = zip_de_test(&[("plan.dwg", &dwg(&l))]);
+        let (_, _, rapport) = lire(&importer_zip_scn(&z, Repere::L93, None).unwrap());
+        assert!(avertissements(&rapport).iter().all(|a| !a.starts_with("Une partie du dessin")), "{rapport}");
+    }
+
+    #[test]
+    fn moins_de_dix_pour_cent_refuse() {
+        let mut l = vec![NICE[0]];
+        l.extend((0..10).map(|i| [i as f64, 0., i as f64 + 1., 1.]));
+        let z = zip_de_test(&[("plan.dwg", &dwg(&l))]);
+        let v: serde_json::Value = serde_json::from_str(&importer_zip_scn(&z, Repere::L93, None).unwrap_err()).unwrap();
+        assert_eq!(v["code"], "non_georeference");
+    }
+
     fn emprise(rapport: &serde_json::Value) -> [f64; 4] {
         let v: Vec<f64> = rapport["emprise"].as_array().expect("emprise attendue").iter().map(|v| v.as_f64().unwrap()).collect();
         v.try_into().unwrap()

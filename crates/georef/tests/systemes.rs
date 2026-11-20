@@ -1,4 +1,4 @@
-use carto_georef::{emprise_essentielle, reconnaitre_points, l93_vers_mercator, reconnaitre, Convertisseur, Reconnaissance, Systeme};
+use carto_georef::{emprise_essentielle, l93_vers_mercator, reconnaitre, reconnaitre_primitives, Convertisseur, Reconnaissance, Systeme};
 
 const CSV: &str = include_str!("fixtures/conversions.csv");
 
@@ -126,22 +126,75 @@ fn performance() {
     assert!(d.as_secs_f64() < 2.0, "100 000 conversions en {d:?}");
 }
 
-fn grille(n: usize, x0: f64, y0: f64, pas: f64) -> Vec<[f64; 2]> {
-    (0..n).map(|i| [x0 + (i % 30) as f64 * pas, y0 + (i / 30) as f64 * pas]).collect()
+/// `n` primitives de `points` points chacune, en grille de 30 colonnes au pas `pas` depuis (x0, y0).
+fn primitives(n: usize, points: usize, x0: f64, y0: f64, pas: f64) -> Vec<Vec<[f64; 2]>> {
+    (0..n)
+        .map(|i| {
+            let (x, y) = (x0 + (i % 30) as f64 * pas, y0 + (i / 30) as f64 * pas);
+            (0..points).map(|k| [x + k as f64 * 0.01, y]).collect()
+        })
+        .collect()
 }
+
+fn vues(v: &[Vec<[f64; 2]>]) -> Vec<&[[f64; 2]]> {
+    v.iter().map(Vec::as_slice).collect()
+}
+
+const L93_RECONNU: Reconnaissance = Reconnaissance { systeme: Systeme::Lambert93, facteur: 1.0 };
 
 #[test]
 fn majorite_avec_cartouche_a_l_origine() {
-    let mut pts = grille(900, 1_040_000., 6_297_000., 10.);
-    pts.extend(grille(100, 0., 0., 1.));
-    let (r, e) = reconnaitre_points(&pts).unwrap();
-    assert_eq!(r, Reconnaissance { systeme: Systeme::Lambert93, facteur: 1.0 });
-    assert!(e[0] >= 1_040_000. && e[2] <= 1_040_300. && e[1] >= 6_297_000. && e[3] <= 6_297_300.);
+    let mut p = primitives(90, 10, 1_040_000., 6_297_000., 10.);
+    p.extend(primitives(10, 10, 0., 0., 1.));
+    let (r, e, part) = reconnaitre_primitives(&vues(&p)).unwrap();
+    assert_eq!(r, L93_RECONNU);
+    assert!((part - 0.9).abs() < 1e-12, "{part}");
+    assert!(e[0] >= 1_040_000. && e[2] <= 1_040_300. && e[1] >= 6_297_000. && e[3] <= 6_297_300., "{e:?}");
 }
 
 #[test]
-fn minorite_refusee() {
-    let mut pts = grille(400, 1_040_000., 6_297_000., 10.);
-    pts.extend(grille(600, 0., 0., 1.));
-    assert!(reconnaitre_points(&pts).is_none());
+fn une_voix_par_primitive_trente_pour_cent_pres_de_l_origine() {
+    // 70 traits de 2 points en Lambert 93, 30 hachures de 100 points près de l'origine : au compte
+    // des points l'origine l'emporterait (3000 contre 140) ; à une voix par primitive, le plan passe.
+    let mut p = primitives(70, 2, 1_040_000., 6_297_000., 10.);
+    p.extend(primitives(30, 100, 0., 0., 1.));
+    let (r, e, part) = reconnaitre_primitives(&vues(&p)).unwrap();
+    assert_eq!(r, L93_RECONNU);
+    assert!((part - 0.7).abs() < 1e-12, "{part}");
+    // L'emprise essentielle ne retient que les points contenus dans le rectangle reconnu.
+    assert!(e[0] >= 1_040_000. && e[1] >= 6_297_000., "{e:?}");
+}
+
+#[test]
+fn cinq_pour_cent_en_l93_refuse() {
+    let mut p = primitives(5, 2, 1_040_000., 6_297_000., 10.);
+    p.extend(primitives(95, 2, 0., 0., 1.));
+    assert!(reconnaitre_primitives(&vues(&p)).is_none());
+}
+
+#[test]
+fn seuil_de_dix_pour_cent() {
+    let mut p = primitives(10, 2, 1_040_000., 6_297_000., 10.);
+    p.extend(primitives(90, 2, 0., 0., 1.));
+    let (r, _, part) = reconnaitre_primitives(&vues(&p)).unwrap();
+    assert_eq!(r, L93_RECONNU);
+    assert!((part - 0.1).abs() < 1e-12);
+    let mut p = primitives(9, 2, 1_040_000., 6_297_000., 10.);
+    p.extend(primitives(91, 2, 0., 0., 1.));
+    assert!(reconnaitre_primitives(&vues(&p)).is_none());
+}
+
+#[test]
+fn premier_point_fini_vote() {
+    // Le premier point non fini est sauté ; une primitive sans point fini ne vote pas.
+    let p = vec![
+        vec![[f64::NAN, 0.], [1_040_000., 6_297_000.], [0., 0.]],
+        vec![[f64::INFINITY, f64::NAN]],
+        vec![],
+    ];
+    let (r, _, part) = reconnaitre_primitives(&vues(&p)).unwrap();
+    assert_eq!(r, L93_RECONNU);
+    assert_eq!(part, 1.0);
+    assert!(reconnaitre_primitives(&vues(&p[1..])).is_none());
+    assert!(reconnaitre_primitives(&[]).is_none());
 }
