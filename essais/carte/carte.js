@@ -5,8 +5,8 @@
 import { echelleMini, lireLignes, genererSegments, contourMercator, anneauxContrainte, anneauxVoile } from "./outils.js";
 import { creerCoucheLignes } from "./couche-lignes.js";
 import { creerCoucheScene } from "./couche-scene.js";
-import { lireScene } from "../commun/scene.js";
 import { empriseACadrer } from "../commun/rendu-scene.js";
+import { creerImporteur, ecouterDepot, estZip } from "../commun/import-projet.js";
 
 // Version épinglée du SDK : seul endroit où elle figure.
 const VERSION_SDK = "5.2";
@@ -34,7 +34,6 @@ const MSG_FOND_NEUTRE = "Clé Esri absente ou refusée : fond neutre";
 const $ = id => document.getElementById(id);
 const entier = new Intl.NumberFormat("fr-FR");
 const decimal = new Intl.NumberFormat("fr-FR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-const comparer = new Intl.Collator("fr", { numeric: true, sensitivity: "base" }).compare;
 const pluriel = (n, mot) => `${entier.format(n)} ${mot}${n >= 2 ? "s" : ""}`;
 const couleurFond = () => getComputedStyle(document.documentElement).getPropertyValue("--fond").trim() || "#f7f6f2";
 
@@ -117,41 +116,16 @@ requestAnimationFrame(t => { debutSeconde = t; requestAnimationFrame(boucle); })
 
 // ---------------------------------------------------------------- dépôt d'un fichier sur la carte
 
-const estZip = f => /\.zip$/i.test(f.name) || f.type === "application/zip" || f.type === "application/x-zip-compressed";
-const avecFichiers = e => [...(e.dataTransfer?.types || [])].includes("Files");
 let ouvrirFichier = null; // fournie quand la carte est prête
-let survols = 0;
 
-// Écoute en phase de capture : la vue ArcGIS ne doit pas pouvoir intercepter le dépôt.
-addEventListener("dragenter", e => {
-  if (!avecFichiers(e)) return;
-  e.preventDefault();
-  survols++;
-  $("carte").classList.add("depot");
-}, true);
-addEventListener("dragover", e => {
-  if (!avecFichiers(e)) return;
-  e.preventDefault();
-  e.dataTransfer.dropEffect = "copy";
-}, true);
-addEventListener("dragleave", e => {
-  if (!avecFichiers(e)) return;
-  survols = Math.max(0, survols - 1);
-  if (survols === 0) $("carte").classList.remove("depot");
-}, true);
-addEventListener("drop", e => {
-  if (!avecFichiers(e)) return;
-  e.preventDefault();
-  survols = 0;
-  $("carte").classList.remove("depot");
-  const fichiers = [...e.dataTransfer.files];
+ecouterDepot($("carte"), fichiers => {
   if (fichiers.length === 0) return;
   if (!ouvrirFichier) {
     message("plan", "Carte non prête : fichier ignoré", true);
     return;
   }
   ouvrirFichier(fichiers.find(estZip) || fichiers[0]);
-}, true);
+});
 
 // ---------------------------------------------------------------- chargements
 
@@ -416,115 +390,20 @@ async function demarrer() {
   }
 
   // ------------------------------------------------------------ projet (ZIP eTransmit)
-  let worker = null;
-  let occupe = false;
-  let jetonImport = 0;
+  const importer = creerImporteur({
+    repere: "mercator",
+    message: (texte, alerte) => message("projet", texte, alerte),
+    ouvrirScene,
+    maitres: $("maitres"),
+    listeMaitres: $("liste-maitres"),
+    choixPropose: () => plier(true),
+  });
 
-  function obtenirWorker() {
-    if (!worker) worker = new Worker(new URL("../commun/worker-scene.js", import.meta.url), { type: "module" });
-    return worker;
-  }
-
-  async function importer(f, maitre) {
-    const demande = { jeton: ++jetonImport, fichier: f, maitre, nom: f.name };
-    $("maitres").hidden = true;
-    if (occupe && worker) {
-      // Un import plus récent remplace celui en cours.
-      worker.terminate();
-      worker = null;
-    }
-    occupe = true;
-    message("projet", maitre ? `Import de ${f.name} (${maitre})…` : `Import de ${f.name}…`);
-    let zip;
-    try {
-      zip = await f.arrayBuffer();
-    } catch (e) {
-      if (demande.jeton === jetonImport) {
-        occupe = false;
-        message("projet", `${f.name} : lecture du fichier impossible (${e.message})`, true);
-      }
-      return;
-    }
-    if (demande.jeton !== jetonImport) return;
-    let w;
-    try {
-      w = obtenirWorker();
-    } catch (e) {
-      occupe = false;
-      message("projet", `Module d'import indisponible (${e.message})`, true);
-      return;
-    }
-    const debut = performance.now();
-    w.onmessage = ({ data }) => {
-      if (demande.jeton !== jetonImport) return;
-      occupe = false;
-      if (data.erreur) {
-        afficherErreur(data.erreur, demande);
-        return;
-      }
-      let scene;
-      try {
-        scene = lireScene(data.scn);
-      } catch (e) {
-        message("projet", `${demande.nom} : scène illisible (${e.message})`, true);
-        return;
-      }
-      try {
-        ouvrirScene(scene, demande, performance.now() - debut);
-      } catch (e) {
-        message("projet", `${demande.nom} : affichage impossible (${e.message})`, true);
-      }
-    };
-    w.onerror = e => {
-      if (demande.jeton !== jetonImport) return;
-      e.preventDefault();
-      occupe = false;
-      worker = null;
-      w.terminate();
-      message("projet", "Module d'import indisponible" + (e.message ? ` (${e.message})` : ""), true);
-    };
-    w.postMessage({ zip, repere: "mercator", maitre }, [zip]);
-  }
-
-  function afficherErreur(erreur, demande) {
-    switch (erreur.code) {
-      case "aucun_dwg":
-        message("projet", `${demande.nom} : aucun dessin DWG dans le ZIP`, true);
-        break;
-      case "plusieurs_maitres":
-        proposerMaitres(erreur.candidats || [], demande);
-        message("projet", `${demande.nom} : plusieurs dessins maîtres possibles, choisir dans la liste`, true);
-        plier(true);
-        break;
-      case "non_georeference":
-        message("projet", erreur.message || "Plan non géoréférencé", true);
-        break;
-      case "lecture":
-        message("projet", `${demande.nom} : lecture impossible (${erreur.message})`, true);
-        break;
-      default:
-        message("projet", `${demande.nom} : import impossible (${JSON.stringify(erreur)})`, true);
-    }
-  }
-
-  function proposerMaitres(candidats, demande) {
-    $("liste-maitres").replaceChildren(...[...candidats].sort(comparer).map(nom => {
-      const li = document.createElement("li");
-      const bouton = document.createElement("button");
-      bouton.type = "button";
-      bouton.textContent = nom;
-      bouton.addEventListener("click", () => importer(demande.fichier, nom));
-      li.append(bouton);
-      return li;
-    }));
-    $("maitres").hidden = candidats.length === 0;
-  }
-
-  function ouvrirScene(scene, demande, ms) {
+  function ouvrirScene(scene, nomFichier, ms) {
     const index = projet.definirScene(scene);
     let nbTraits = 0;
     for (const p of scene.primitives) if (p.genre === "trait") nbTraits++;
-    const nom = scene.rapport?.maitre || demande.nom;
+    const nom = scene.rapport?.maitre || nomFichier;
     const e = index.etendue;
     if (!(e.xmin <= e.xmax)) {
       message("projet", `${nom} : aucune primitive à afficher`, true);

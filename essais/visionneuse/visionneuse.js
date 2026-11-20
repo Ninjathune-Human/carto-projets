@@ -2,8 +2,8 @@
 // rendu WebGL2 sur fond gris clair, calques, rapport, et comparaison avec une capture d'AutoCAD.
 // Rien ne quitte le navigateur : le ZIP et la capture sont lus localement.
 
-import { lireScene } from "../commun/scene.js";
 import { preparerTampons, origineScene, empriseACadrer, creerRendu } from "../commun/rendu-scene.js";
+import { creerImporteur, ecouterDepot, estZip } from "../commun/import-projet.js";
 
 const FOND = [0xd9 / 255, 0xd9 / 255, 0xd9 / 255];
 const RESOLUTION_MIN = 1e-4;   // m par px CSS : 0,1 mm
@@ -219,111 +219,16 @@ canvas.addEventListener("gesturestart", e => e.preventDefault()); // Safari : pa
 
 // ---------------------------------------------------------------- import du projet
 
-let worker = null;
-let occupe = false;
-let jeton = 0;
+const importer = creerImporteur({
+  repere: "l93",
+  message: (texte, alerte) => message("projet", texte, alerte),
+  ouvrirScene,
+  maitres: $("maitres"),
+  listeMaitres: $("liste-maitres"),
+  choixPropose: () => plier(true),
+});
 
-function obtenirWorker() {
-  if (!worker) worker = new Worker(new URL("../commun/worker-scene.js", import.meta.url), { type: "module" });
-  return worker;
-}
-
-async function importer(fichier, maitre) {
-  const demande = { jeton: ++jeton, fichier, maitre, nom: fichier.name };
-  $("maitres").hidden = true;
-  if (occupe && worker) {
-    // Un import plus récent remplace celui en cours.
-    worker.terminate();
-    worker = null;
-  }
-  occupe = true;
-  message("projet", maitre ? `Import de ${fichier.name} (${maitre})…` : `Import de ${fichier.name}…`);
-  let zip;
-  try {
-    zip = await fichier.arrayBuffer();
-  } catch (e) {
-    if (demande.jeton === jeton) {
-      occupe = false;
-      message("projet", `${fichier.name} : lecture du fichier impossible (${e.message})`, true);
-    }
-    return;
-  }
-  if (demande.jeton !== jeton) return;
-  let w;
-  try {
-    w = obtenirWorker();
-  } catch (e) {
-    occupe = false;
-    message("projet", `Module d'import indisponible (${e.message})`, true);
-    return;
-  }
-  const debut = performance.now();
-  w.onmessage = ({ data }) => {
-    if (demande.jeton !== jeton) return;
-    occupe = false;
-    if (data.erreur) {
-      afficherErreur(data.erreur, demande);
-      return;
-    }
-    let scene;
-    try {
-      scene = lireScene(data.scn);
-    } catch (e) {
-      message("projet", `${demande.nom} : scène illisible (${e.message})`, true);
-      return;
-    }
-    try {
-      ouvrirScene(scene, demande, performance.now() - debut);
-    } catch (e) {
-      message("projet", `${demande.nom} : affichage impossible (${e.message})`, true);
-    }
-  };
-  w.onerror = e => {
-    if (demande.jeton !== jeton) return;
-    e.preventDefault();
-    occupe = false;
-    worker = null;
-    w.terminate();
-    message("projet", "Module d'import indisponible" + (e.message ? ` (${e.message})` : ""), true);
-  };
-  w.postMessage({ zip, repere: "l93", maitre }, [zip]);
-}
-
-function afficherErreur(erreur, demande) {
-  switch (erreur.code) {
-    case "aucun_dwg":
-      message("projet", `${demande.nom} : aucun dessin DWG dans le ZIP`, true);
-      break;
-    case "plusieurs_maitres":
-      proposerMaitres(erreur.candidats || [], demande);
-      message("projet", `${demande.nom} : plusieurs dessins maîtres possibles, choisir dans la liste`, true);
-      plier(true);
-      break;
-    case "non_georeference":
-      message("projet", erreur.message || "Plan non géoréférencé", true);
-      break;
-    case "lecture":
-      message("projet", `${demande.nom} : lecture impossible (${erreur.message})`, true);
-      break;
-    default:
-      message("projet", `${demande.nom} : import impossible (${JSON.stringify(erreur)})`, true);
-  }
-}
-
-function proposerMaitres(candidats, demande) {
-  $("liste-maitres").replaceChildren(...[...candidats].sort(comparer).map(nom => {
-    const li = document.createElement("li");
-    const bouton = document.createElement("button");
-    bouton.type = "button";
-    bouton.textContent = nom;
-    bouton.addEventListener("click", () => importer(demande.fichier, nom));
-    li.append(bouton);
-    return li;
-  }));
-  $("maitres").hidden = candidats.length === 0;
-}
-
-function ouvrirScene(scene, demande, ms) {
+function ouvrirScene(scene, nomFichier, ms) {
   const tampons = preparerTampons(scene, origineScene(scene));
   let nbTraits = 0;
   for (const p of scene.primitives) if (p.genre === "trait") nbTraits++;
@@ -342,7 +247,7 @@ function ouvrirScene(scene, demande, ms) {
   $("ensemble").disabled = !projet.cadrage;
   vueEnsemble();
   demander();
-  const nom = scene.rapport?.maitre || demande.nom;
+  const nom = scene.rapport?.maitre || nomFichier;
   if (!tampons.emprise) message("projet", `${nom} : aucune primitive à afficher`, true);
   else message("projet", `${nom} : ${pluriel(projet.nbTraits, "trait")} et ${pluriel(projet.nbSurfaces, "surface")}, importé en ${entier.format(Math.round(ms))} ms`);
 }
@@ -484,33 +389,9 @@ $("opacite").addEventListener("input", () => {
 
 // ---------------------------------------------------------------- dépôt de fichiers sur la page
 
-const estZip = f => /\.zip$/i.test(f.name) || f.type === "application/zip" || f.type === "application/x-zip-compressed";
 const estImage = f => f.type.startsWith("image/") || /\.(png|jpe?g|webp|gif|bmp)$/i.test(f.name);
-const avecFichiers = e => [...(e.dataTransfer?.types || [])].includes("Files");
-let survols = 0;
 
-addEventListener("dragenter", e => {
-  if (!avecFichiers(e)) return;
-  e.preventDefault();
-  survols++;
-  vueEl.classList.add("depot");
-});
-addEventListener("dragover", e => {
-  if (!avecFichiers(e)) return;
-  e.preventDefault();
-  e.dataTransfer.dropEffect = "copy";
-});
-addEventListener("dragleave", e => {
-  if (!avecFichiers(e)) return;
-  survols = Math.max(0, survols - 1);
-  if (survols === 0) vueEl.classList.remove("depot");
-});
-addEventListener("drop", e => {
-  if (!avecFichiers(e)) return;
-  e.preventDefault();
-  survols = 0;
-  vueEl.classList.remove("depot");
-  const fichiers = [...e.dataTransfer.files];
+ecouterDepot(vueEl, fichiers => {
   const zip = fichiers.find(estZip);
   const image = fichiers.find(estImage);
   if (zip) importer(zip);
