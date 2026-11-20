@@ -56,7 +56,7 @@ Le code partagé par les deux pages est dans `essais/commun/`.
 
 ### Outils en ligne de commande
 
-- Scène SCN1 d'un ZIP : `cargo run --release -p carto-bench --bin bench -- scene <zip> <sortie.scn>`
+- Scène SCN1 d'un ZIP : `cargo run --release -p carto-bench --bin bench -- scene <zip> <sortie.scn> [l93|mercator] [maitre]` (repère `l93` par défaut ; `maitre` désigne le dessin à ouvrir quand plusieurs sont possibles)
 - Aperçu PNG d'une scène : `python3 tools/apercu_scene.py <scene.scn> <apercu.png>`
 
 L'aperçu demande Pillow et numpy : `pip install -r tools/requirements.txt`.
