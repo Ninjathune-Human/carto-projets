@@ -1,6 +1,8 @@
 // Import d'un projet ZIP eTransmit, commun à la visionneuse et à la carte : worker wasm
 // (worker-scene.js), import le plus récent prioritaire, messages d'erreur, choix du dessin maître,
-// et dépôt de fichiers sur la page.
+// et dépôt de fichiers sur la page. Après une erreur, un piège wasm ou un délai dépassé, le worker
+// est terminé : le suivant repart d'une instance wasm neuve (un piège laisse l'instance dans un
+// état indéfini, et sa mémoire resterait à son pic).
 
 import { lireScene } from "./scene.js";
 
@@ -8,6 +10,23 @@ const comparer = new Intl.Collator("fr", { numeric: true, sensitivity: "base" })
 
 /** Vrai pour un fichier ZIP, reconnu à son extension ou à son type MIME. */
 export const estZip = f => /\.zip$/i.test(f.name) || f.type === "application/zip" || f.type === "application/x-zip-compressed";
+
+/** Durée maximale d'un import, en ms. */
+export const DELAI_IMPORT_MS = 120_000;
+
+/**
+ * Erreur structurée tirée du texte d'une exception du moteur : le JSON `{ code, … }` de carto-wasm
+ * tel quel ; tout autre texte (« unreachable », RuntimeError…) est un piège wasm, `{ code: "piege" }`.
+ */
+export function erreurMoteur(texte) {
+  try {
+    const e = JSON.parse(texte);
+    if (e && typeof e === "object" && typeof e.code === "string") return e;
+  } catch {
+    // pas du JSON : piège
+  }
+  return { code: "piege", message: texte };
+}
 
 /** Message affiché pour une erreur du worker ({ code, … }) sur le fichier `nom`. */
 export function messageErreur(erreur, nom) {
@@ -20,6 +39,12 @@ export function messageErreur(erreur, nom) {
       return erreur.message || "Plan non géoréférencé";
     case "lecture":
       return `${nom} : lecture impossible (${erreur.message})`;
+    case "piege":
+      return "Lecture impossible : un dessin du ZIP a interrompu le moteur.";
+    case "delai":
+      return "Import trop long : abandon après 120 s.";
+    case "reponse":
+      return `${nom} : réponse du module d'import illisible`;
     default:
       return `${nom} : import impossible (${JSON.stringify(erreur)})`;
   }
@@ -38,10 +63,20 @@ export function creerImporteur({ repere, message, ouvrirScene, maitres, listeMai
   let worker = null;
   let occupe = false;
   let jeton = 0;
+  let minuterie = null;
 
   function obtenirWorker() {
     if (!worker) worker = new Worker(new URL("./worker-scene.js", import.meta.url), { type: "module" });
     return worker;
+  }
+
+  // Termine le worker et son délai : le prochain import en crée un neuf.
+  function jeterWorker() {
+    clearTimeout(minuterie);
+    minuterie = null;
+    worker?.terminate();
+    worker = null;
+    occupe = false;
   }
 
   // Un bouton par candidat : un appui réimporte le même fichier avec ce dessin maître.
@@ -62,11 +97,8 @@ export function creerImporteur({ repere, message, ouvrirScene, maitres, listeMai
     const demande = ++jeton;
     const nom = fichier.name;
     maitres.hidden = true;
-    if (occupe && worker) {
-      // Un import plus récent remplace celui en cours.
-      worker.terminate();
-      worker = null;
-    }
+    // Un import plus récent remplace celui en cours.
+    if (occupe) jeterWorker();
     occupe = true;
     message(maitre ? `Import de ${nom} (${maitre})…` : `Import de ${nom}…`);
     let zip;
@@ -90,9 +122,12 @@ export function creerImporteur({ repere, message, ouvrirScene, maitres, listeMai
     }
     const debut = performance.now();
     w.onmessage = ({ data }) => {
-      if (demande !== jeton) return;
+      if (demande !== jeton || w !== worker) return;
+      clearTimeout(minuterie);
+      minuterie = null;
       occupe = false;
       if (data.erreur) {
+        jeterWorker();
         const plusieurs = data.erreur.code === "plusieurs_maitres";
         if (plusieurs) proposerMaitres(data.erreur.candidats || [], fichier);
         message(messageErreur(data.erreur, nom), true);
@@ -113,13 +148,21 @@ export function creerImporteur({ repere, message, ouvrirScene, maitres, listeMai
       }
     };
     w.onerror = e => {
-      if (demande !== jeton) return;
+      if (demande !== jeton || w !== worker) return;
       e.preventDefault();
-      occupe = false;
-      worker = null;
-      w.terminate();
+      jeterWorker();
       message("Module d'import indisponible" + (e.message ? ` (${e.message})` : ""), true);
     };
+    w.onmessageerror = () => {
+      if (demande !== jeton || w !== worker) return;
+      jeterWorker();
+      message(messageErreur({ code: "reponse" }, nom), true);
+    };
+    minuterie = setTimeout(() => {
+      if (demande !== jeton || w !== worker) return;
+      jeterWorker();
+      message(messageErreur({ code: "delai" }, nom), true);
+    }, DELAI_IMPORT_MS);
     w.postMessage({ zip, repere, maitre }, [zip]);
   }
 
