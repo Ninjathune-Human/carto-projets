@@ -4,6 +4,7 @@ pub mod erreur;
 pub mod inventaire;
 pub mod lignes;
 pub mod mesure;
+pub mod proprietes;
 pub mod scene;
 
 pub use erreur::ErreurCad;
