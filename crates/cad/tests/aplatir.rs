@@ -220,8 +220,9 @@ fn entites_simples() {
 
     let r = aplatir_doc(doc);
     let p = &r.scene.primitives;
-    assert_eq!(p.len(), 7, "{p:?}");
-    assert_eq!(traits(&r).len(), 4);
+    // 7 entités ; la LWPOLYLINE large donne sa bande puis son trait d'axe (R14).
+    assert_eq!(p.len(), 8, "{p:?}");
+    assert_eq!(traits(&r).len(), 5);
 
     // LINE : rouge, 0,5 mm, deux points
     match &p[0] {
@@ -253,19 +254,23 @@ fn entites_simples() {
     assert_eq!(points[0], *points.last().unwrap());
     assert!(points.iter().any(|q| proche(*q, [44., 0.])));
 
-    // LWPOLYLINE à largeur : bande de 10 × 0,5
+    // LWPOLYLINE à largeur : bande de 10 × 0,5, puis trait fin sur l'axe
     let Primitive::Surface { triangles, .. } = &p[4] else { panic!("LWPOLYLINE") };
     assert_eq!(couleur(&p[4]), rgba(couleur_aci(3)));
     assert!((aire_triangles(triangles) - 5.).abs() < 1e-9);
+    let Primitive::Trait { points, epaisseur_mm, .. } = &p[5] else { panic!("axe de la LWPOLYLINE") };
+    assert_eq!(couleur(&p[5]), rgba(couleur_aci(3)));
+    assert_eq!(*epaisseur_mm, 0.);
+    assert!(points_proches(points, &[[0., 50.], [10., 50.]]), "{points:?}");
 
     // HATCH pleine
-    let Primitive::Surface { triangles, .. } = &p[5] else { panic!("HATCH") };
-    assert_eq!(couleur(&p[5]), rgba(couleur_aci(2)));
+    let Primitive::Surface { triangles, .. } = &p[6] else { panic!("HATCH") };
+    assert_eq!(couleur(&p[6]), rgba(couleur_aci(2)));
     assert!((aire_triangles(triangles) - 100.).abs() < 1e-6);
 
     // SOLID (ordre 1, 2, 4, 3)
-    let Primitive::Surface { triangles, .. } = &p[6] else { panic!("SOLID") };
-    assert_eq!(couleur(&p[6]), rgba(couleur_aci(4)));
+    let Primitive::Surface { triangles, .. } = &p[7] else { panic!("SOLID") };
+    assert_eq!(couleur(&p[7]), rgba(couleur_aci(4)));
     assert!((aire_triangles(triangles) - 100.).abs() < 1e-6);
 }
 
@@ -540,11 +545,15 @@ fn fleche_tige_fine_tete_effilee() {
     doc.add_entity(EntityType::LwPolyline(p)).unwrap();
     let r = aplatir_doc(doc);
     let p = &r.scene.primitives;
-    assert_eq!(p.len(), 2, "{p:?}");
+    // Tige fine (un seul trait, sans doublon), tête large puis l'axe de la tête (R14).
+    assert_eq!(p.len(), 3, "{p:?}");
     let Primitive::Trait { points, .. } = &p[0] else { panic!("tige : {:?}", p[0]) };
     assert!(points_proches(points, &[[0., 0.], [10., 0.]]), "{points:?}");
     let Primitive::Surface { triangles, .. } = &p[1] else { panic!("tête : {:?}", p[1]) };
     assert!((aire_triangles(triangles) - 1.).abs() < 1e-9);
+    let Primitive::Trait { points, epaisseur_mm, .. } = &p[2] else { panic!("axe de la tête : {:?}", p[2]) };
+    assert_eq!(*epaisseur_mm, 0.);
+    assert!(points_proches(points, &[[10., 0.], [12., 0.]]), "{points:?}");
 }
 
 #[test]
@@ -567,10 +576,13 @@ fn polyligne_fermee_mixte() {
     doc.add_entity(EntityType::LwPolyline(p)).unwrap();
     let r = aplatir_doc(doc);
     let p = &r.scene.primitives;
-    assert_eq!(p.len(), 2, "{p:?}");
+    // Côté large, son axe (R14), puis les côtés fins.
+    assert_eq!(p.len(), 3, "{p:?}");
     let Primitive::Surface { triangles, .. } = &p[0] else { panic!("côté large : {:?}", p[0]) };
     assert!((aire_triangles(triangles) - 20.).abs() < 1e-9);
-    let Primitive::Trait { points, .. } = &p[1] else { panic!("côtés fins : {:?}", p[1]) };
+    let Primitive::Trait { points, .. } = &p[1] else { panic!("axe du côté large : {:?}", p[1]) };
+    assert!(points_proches(points, &[[10., 0.], [10., 10.]]), "{points:?}");
+    let Primitive::Trait { points, .. } = &p[2] else { panic!("côtés fins : {:?}", p[2]) };
     assert!(points_proches(points, &[[10., 10.], [0., 10.], [0., 0.], [10., 0.]]), "{points:?}");
 }
 
@@ -585,9 +597,61 @@ fn polyligne_2d_a_largeur_par_sommet() {
     p.add_vertex(Vertex2D::new(Vector3::new(10., 0., 0.)));
     doc.add_entity(EntityType::Polyline2D(p)).unwrap();
     let r = aplatir_doc(doc);
-    assert_eq!(r.scene.primitives.len(), 1);
+    // La bande puis son axe (R14).
+    assert_eq!(r.scene.primitives.len(), 2);
     let Primitive::Surface { triangles, .. } = &r.scene.primitives[0] else { panic!("surface attendue") };
     assert!((aire_triangles(triangles) - 10.).abs() < 1e-9);
+    let Primitive::Trait { points, epaisseur_mm, .. } = &r.scene.primitives[1] else { panic!("axe attendu") };
+    assert_eq!(*epaisseur_mm, 0.);
+    assert!(points_proches(points, &[[0., 0.], [10., 0.]]), "{points:?}");
+}
+
+#[test]
+fn polyligne_large_doublee_d_un_trait_d_axe() {
+    // Au-delà de quelques mètres, une bande de 14 cm fait moins d'un pixel : le trait d'axe (0 mm,
+    // donc 1 px) la garde visible, comme AutoCAD. Même couleur, même calque, rang suivant, même
+    // échantillonnage des renflements que la bande.
+    let mut doc = CadDocument::new();
+    ajouter_calque(&mut doc, "Murs", false, false);
+    let mut p = LwPolyline::new();
+    let mut a = LwVertex::new(Vector2::new(0., 0.));
+    a.bulge = 1.; // demi-cercle de rayon 5 centré en (5, 0)
+    p.vertices.push(a);
+    p.vertices.push(LwVertex::new(Vector2::new(10., 0.)));
+    p.vertices.push(LwVertex::new(Vector2::new(10., -5.)));
+    p.constant_width = 0.14;
+    p.common.layer = "Murs".into();
+    p.common.color = Color::Index(1);
+    p.common.line_weight = LineWeight::Value(50);
+    doc.add_entity(EntityType::LwPolyline(p)).unwrap();
+    // Fermée et entièrement large : l'axe est fermé (premier point répété).
+    let mut f = lwpolyligne(&[(0., 20., 1., 1.), (10., 20., 1., 1.), (10., 30., 1., 1.)]);
+    f.is_closed = true;
+    doc.add_entity(EntityType::LwPolyline(f)).unwrap();
+    let r = aplatir_doc(doc);
+    let p = &r.scene.primitives;
+    assert_eq!(p.len(), 4, "{p:?}");
+    assert!(matches!(p[0], Primitive::Surface { .. }), "{:?}", p[0]);
+    let Primitive::Trait { points, epaisseur_mm, .. } = &p[1] else { panic!("axe : {:?}", p[1]) };
+    assert_eq!(*epaisseur_mm, 0.);
+    assert_eq!(couleur(&p[1]), couleur(&p[0]));
+    assert_eq!(nom_calque(&r, &p[1]), "Murs");
+    assert_eq!(nom_calque(&r, &p[0]), "Murs");
+    // Le renflement est échantillonné (renflement 1 de (0, 0) à (10, 0) : demi-cercle dans le sens
+    // trigonométrique, par (5, -5)) : tous ses points sont à 5 du centre ; puis le segment droit.
+    let fin_arc = points.iter().position(|q| proche(*q, [10., 0.])).expect("fin du renflement");
+    assert!(fin_arc > 8, "{points:?}");
+    assert!(points[..=fin_arc].iter().all(|q| ((q[0] - 5.).hypot(q[1]) - 5.).abs() < 1e-9), "{points:?}");
+    assert!(points_proches(&points[fin_arc..], &[[10., 0.], [10., -5.]]), "{points:?}");
+    assert!(proche(points[0], [0., 0.]));
+    // La bande suit cet axe : son aire est la largeur fois la longueur de l'axe.
+    let Primitive::Surface { triangles, .. } = &p[0] else { unreachable!() };
+    let attendu = 0.14 * (5. * std::f64::consts::PI + 5.);
+    assert!((aire_triangles(triangles) - attendu).abs() < 0.01 * attendu, "{}", aire_triangles(triangles));
+    // Polyligne fermée large.
+    assert!(matches!(p[2], Primitive::Surface { .. }), "{:?}", p[2]);
+    let Primitive::Trait { points, .. } = &p[3] else { panic!("axe fermé : {:?}", p[3]) };
+    assert!(points_proches(points, &[[0., 20.], [10., 20.], [10., 30.], [0., 20.]]), "{points:?}");
 }
 
 #[test]

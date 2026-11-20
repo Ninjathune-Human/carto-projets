@@ -159,6 +159,8 @@ fn plan(n: Vector3) -> Plan {
 enum Forme {
     Trait(Vec<[f64; 2]>),
     Surface(Vec<[f64; 2]>),
+    /// Axe d'une bande de polyligne large : trait fin (0 mm), qui la garde visible sous le pixel.
+    Axe(Vec<[f64; 2]>),
 }
 
 /// Sommet de polyligne : position, renflement du segment sortant, largeurs de début et de fin.
@@ -182,7 +184,8 @@ fn fermer(v: &mut [[f64; 2]]) {
 }
 
 /// Polyligne à renflements : chaque suite de segments sans largeur donne un `Trait`, chaque suite
-/// de segments larges une `Surface` (bande). Le segment i prend les largeurs du sommet i.
+/// de segments larges une `Surface` (bande) suivie de son `Axe`, mêmes points que la bande. Le
+/// segment i prend les largeurs du sommet i.
 fn polyligne(s: &[Sommet], fermee: bool, tol: f64) -> Vec<Forme> {
     let n = s.len();
     if n < 2 {
@@ -212,14 +215,16 @@ fn polyligne(s: &[Sommet], fermee: bool, tol: f64) -> Vec<Forme> {
             pts.extend(sous);
             k += 1;
         }
-        formes.push(if !suite_large {
-            Forme::Trait(pts)
+        if !suite_large {
+            formes.push(Forme::Trait(pts));
         } else {
+            let axe = pts.clone(); // fermée : le premier point y est déjà répété
             if fermee_entiere {
                 pts.pop(); // le dernier point est le premier : `bande` ferme elle-même
             }
-            Forme::Surface(bande(&pts, &largeurs, fermee_entiere))
-        });
+            formes.push(Forme::Surface(bande(&pts, &largeurs, fermee_entiere)));
+            formes.push(Forme::Axe(axe));
+        }
     }
     formes
 }
@@ -531,9 +536,10 @@ impl<'a> Parcours<'a> {
     }
 
     fn emettre(&mut self, h: &Herite, couleur: [u8; 3], forme: Forme, m: &Affine) {
-        let (surface, points, minimum) = match forme {
-            Forme::Trait(p) => (false, p, 2),
-            Forme::Surface(t) => (true, t, 3),
+        let (surface, points, minimum, epaisseur_mm) = match forme {
+            Forme::Trait(p) => (false, p, 2, h.epaisseur_mm),
+            Forme::Axe(p) => (false, p, 2, 0.),
+            Forme::Surface(t) => (true, t, 3, 0.),
         };
         if points.len() < minimum {
             return;
@@ -557,7 +563,7 @@ impl<'a> Parcours<'a> {
             self.scene.primitives.push(if surface {
                 Primitive::Surface { calque, couleur, triangles: points }
             } else {
-                Primitive::Trait { calque, couleur, epaisseur_mm: h.epaisseur_mm, points }
+                Primitive::Trait { calque, couleur, epaisseur_mm, points }
             });
         }
     }
