@@ -149,7 +149,7 @@ fn xref_exclue_des_maitres() {
 fn resolution_chemins() {
     let chemins = vec!["fonds/topo.dwg".to_string(), "plan.dwg".to_string()];
     assert_eq!(resoudre_chemin(r"C:\Projet\Fonds\Topo.DWG", "plan.dwg", &chemins), Some("fonds/topo.dwg".to_string()));
-    // Chemin enregistré tel quel.
+    // Chemin relatif, hôte à la racine.
     assert_eq!(resoudre_chemin(r"Fonds\TOPO.dwg", "plan.dwg", &chemins), Some("fonds/topo.dwg".to_string()));
     // Chemin relatif au dossier de l'hôte.
     let chemins = vec!["fonds/topo.dwg".to_string(), "plans/plan.dwg".to_string()];
@@ -158,6 +158,18 @@ fn resolution_chemins() {
     let chemins = vec!["plan.dwg".to_string(), "xrefs/topo.dwg".to_string()];
     assert_eq!(resoudre_chemin(r"C:\Projet\Fonds\Topo.DWG", "plan.dwg", &chemins), Some("xrefs/topo.dwg".to_string()));
     assert_eq!(resoudre_chemin(r"C:\Projet\Fonds\Absent.dwg", "plan.dwg", &chemins), None);
+}
+
+#[test]
+fn point_relatif_a_l_hote() {
+    let chemins = vec!["c.dwg".to_string(), "xrefs/a.dwg".to_string(), "xrefs/c.dwg".to_string()];
+    assert_eq!(resoudre_chemin(r".\c.dwg", "xrefs/a.dwg", &chemins), Some("xrefs/c.dwg".to_string()));
+}
+
+#[test]
+fn relatif_sans_prefixe_depuis_un_sous_dossier() {
+    let chemins = vec!["plans/plan.dwg".to_string(), "plans/topo.dwg".to_string(), "topo.dwg".to_string()];
+    assert_eq!(resoudre_chemin("Topo.dwg", "plans/plan.dwg", &chemins), Some("plans/topo.dwg".to_string()));
 }
 
 // --- Xréfs ---
@@ -256,8 +268,15 @@ fn xref_imbriquee_nommee_par_la_plus_interne() {
     // Chemin relatif à l'hôte intermédiaire.
     attacher(&mut a, "C", r".\c.dwg", Attache::default(), "0");
     let c = dessin(6, vec![ligne(0., 0., 1., 0., "L")]);
-    let z = zip_de(&[("plan.dwg", dwg(&plan)), ("xrefs/a.dwg", dwg(&a)), ("xrefs/c.dwg", dwg(&c))]);
-    let r = importer_zip(&z, None).unwrap();
+    // Homonyme à la racine, au contenu différent : il ne doit pas être pris à la place.
+    let homonyme = dessin(6, vec![ligne(0., 0., 1., 0., "R")]);
+    let z = zip_de(&[
+        ("plan.dwg", dwg(&plan)),
+        ("xrefs/a.dwg", dwg(&a)),
+        ("xrefs/c.dwg", dwg(&c)),
+        ("c.dwg", dwg(&homonyme)),
+    ]);
+    let r = importer_zip(&z, Some("plan.dwg")).unwrap();
     assert_eq!(calques(&r), vec!["C|L".to_string()]);
 }
 

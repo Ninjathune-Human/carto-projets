@@ -80,12 +80,19 @@ fn tete_commune(a: &str, b: &str) -> usize {
 }
 
 /// Chemin dans l'archive d'une xréf enregistrée sous `chemin_enregistre` par le dessin `depuis`,
-/// casse ignorée, dans l'ordre :
+/// casse ignorée. Chemin relatif (ni lecteur, ni `/` ou `\` de tête, ni partage `\\`), dans l'ordre :
+/// 1. relatif au dossier de l'hôte (`.` et `..` résolus), forme qu'AutoCAD écrit (`.\…`, `..\…`) ;
+/// 2. depuis la racine de l'archive ;
+/// 3. le nom de fichier seul.
+///
+/// Chemin absolu, dans l'ordre :
 /// 1. le chemin enregistré normalisé (séparateur `/`) ;
-/// 2. le chemin relatif au dossier de l'hôte : résolu tel quel s'il est relatif, puis ses fins de
-///    chemin (lecteur et racine ôtés), de la plus longue à la plus courte, depuis le dossier de
-///    l'hôte puis chacun de ses parents (un eTransmit garde l'arborescence sous une racine commune) ;
-/// 3. le nom de fichier seul, n'importe où ; entre homonymes, le plus proche du dossier de l'hôte.
+/// 2. ses fins de chemin (lecteur et racine ôtés), de la plus longue à la plus courte, depuis le
+///    dossier de l'hôte puis chacun de ses parents (un eTransmit garde l'arborescence sous une
+///    racine commune) ;
+/// 3. le nom de fichier seul.
+///
+/// Le nom seul se cherche n'importe où ; entre homonymes, le plus proche du dossier de l'hôte.
 pub fn resoudre_chemin(chemin_enregistre: &str, depuis: &str, chemins: &[String]) -> Option<String> {
     let enregistre = normaliser(chemin_enregistre.trim());
     let minuscules: Vec<String> = chemins.iter().map(|c| c.to_lowercase()).collect();
@@ -93,29 +100,33 @@ pub fn resoudre_chemin(chemin_enregistre: &str, depuis: &str, chemins: &[String]
         let c = c.to_lowercase();
         minuscules.iter().position(|m| *m == c).map(|i| chemins[i].clone())
     };
-    // 1. Chemin enregistré.
-    if let Some(c) = trouver(enregistre.trim_start_matches("./")) {
-        return Some(c);
-    }
-    // 2. Relatif au dossier de l'hôte.
-    let morceaux: Vec<&str> = enregistre.split('/').collect();
-    let absolu = enregistre.starts_with('/') || morceaux[0].ends_with(':');
     let hote = dossier(depuis);
-    if !absolu {
-        if let Some(c) = joindre(hote, &morceaux).and_then(|c| trouver(&c)) {
+    let b = enregistre.as_bytes();
+    let lecteur = b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':';
+    let morceaux: Vec<&str> = enregistre[if lecteur { 2 } else { 0 }..].split('/').collect();
+    let utiles: Vec<&str> = morceaux.iter().copied().filter(|s| !matches!(*s, "" | "." | "..")).collect();
+    if lecteur || enregistre.starts_with('/') {
+        // 1. Chemin enregistré.
+        if let Some(c) = trouver(&enregistre) {
             return Some(c);
         }
-    }
-    let utiles: Vec<&str> =
-        morceaux.iter().copied().filter(|s| !matches!(*s, "" | "." | "..") && !s.ends_with(':')).collect();
-    let (mut dossiers, mut d) = (vec![hote], hote);
-    while !d.is_empty() {
-        d = dossier(d);
-        dossiers.push(d);
-    }
-    for k in 0..utiles.len() {
-        for d in &dossiers {
-            if let Some(c) = joindre(d, &utiles[k..]).and_then(|c| trouver(&c)) {
+        // 2. Fins de chemin depuis le dossier de l'hôte et ses parents.
+        let (mut dossiers, mut d) = (vec![hote], hote);
+        while !d.is_empty() {
+            d = dossier(d);
+            dossiers.push(d);
+        }
+        for k in 0..utiles.len() {
+            for d in &dossiers {
+                if let Some(c) = joindre(d, &utiles[k..]).and_then(|c| trouver(&c)) {
+                    return Some(c);
+                }
+            }
+        }
+    } else {
+        // 1. Relatif au dossier de l'hôte, 2. depuis la racine de l'archive.
+        for base in [hote, ""] {
+            if let Some(c) = joindre(base, &morceaux).and_then(|c| trouver(&c)) {
                 return Some(c);
             }
         }
