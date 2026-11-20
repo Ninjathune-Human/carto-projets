@@ -1,8 +1,8 @@
 use acadrust::entities::hatch::{
-    BoundaryEdge, BoundaryPath, CircularArcEdge, LineEdge, PolylineEdge,
+    BoundaryEdge, BoundaryPath, CircularArcEdge, EllipticArcEdge, LineEdge, PolylineEdge, SplineEdge,
 };
 use acadrust::entities::Hatch;
-use acadrust::types::Vector2;
+use acadrust::types::{Vector2, Vector3};
 use carto_cad::hachures::anneaux_hachure;
 use carto_cad::trianguler;
 use std::f64::consts::PI;
@@ -77,23 +77,110 @@ fn chemin_arcs() {
     }
 }
 
+fn proche(a: [f64; 2], b: [f64; 2]) -> bool {
+    (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9
+}
+
 #[test]
 fn arc_horaire() {
-    // Convention acadrust : angles d'un arc horaire stockés en miroir (point réel à -theta).
-    // 0 -> PI horaire = demi-cercle inférieur (y < 0), de (5,0) vers (-5,0).
+    // Convention acadrust (confirmee sur un DWG reel) : angles horaires stockes en miroir.
+    // Stocke 0 -> PI/2, horaire : reel de (5,0) vers (0,-5), par le quart inferieur droit.
+    // Lue comme angles reels, la meme arete irait de (5,0) a (0,5) par 270 degres.
     let mut p = BoundaryPath::new();
-    p.edges.push(demi(0.0, PI, false));
+    p.edges.push(demi(0.0, PI / 2.0, false));
     p.edges.push(BoundaryEdge::Line(LineEdge {
-        start: Vector2::new(-5.0, 0.0),
+        start: Vector2::new(0.0, -5.0),
+        end: Vector2::new(0.0, 0.0),
+    }));
+    p.edges.push(BoundaryEdge::Line(LineEdge {
+        start: Vector2::new(0.0, 0.0),
         end: Vector2::new(5.0, 0.0),
     }));
     let r = anneaux_hachure(&hachure(vec![p]), TOL);
     assert_eq!(r.len(), 1);
     let a = &r[0];
-    assert!((a[0][0] - 5.0).abs() < 1e-9 && a[0][1].abs() < 1e-9);
-    assert!(a.iter().all(|q| q[1] < 1e-9));
-    assert!(a.iter().any(|q| q[1] < -4.9));
-    assert!((aire_anneau(a) - PI * 25.0 / 2.0).abs() < 0.05);
+    assert!(proche(a[0], [5.0, 0.0]));
+    assert!(a.iter().all(|q| q[0] > -1e-9 && q[1] < 1e-9));
+    assert!((aire_anneau(a) - PI * 25.0 / 4.0).abs() < 0.05);
+    let i = a.iter().position(|q| proche(*q, [0.0, -5.0])).expect("fin de l'arc");
+    assert!(a[..=i].iter().all(|q| (q[0].hypot(q[1]) - 5.0).abs() < 1e-9));
+}
+
+#[test]
+fn ellipse_horaire_axe_tourne() {
+    // Grand axe (0,4), rapport 0,5, centre (10,20) ; point(t) = c + (-2 sin t, 4 cos t).
+    // Horaire, parametres stockes 0,3 -> 1,2 : reel de point(-0,3) a point(-1,2).
+    let mut p = BoundaryPath::new();
+    p.edges.push(BoundaryEdge::EllipticArc(EllipticArcEdge {
+        center: Vector2::new(10.0, 20.0),
+        major_axis_endpoint: Vector2::new(0.0, 4.0),
+        minor_axis_ratio: 0.5,
+        start_angle: 0.3,
+        end_angle: 1.2,
+        counter_clockwise: false,
+    }));
+    let pt = |t: f64| [10.0 - 2.0 * f64::sin(t), 20.0 + 4.0 * f64::cos(t)];
+    let r = anneaux_hachure(&hachure(vec![p]), TOL);
+    assert_eq!(r.len(), 1);
+    let a = &r[0];
+    assert!(proche(a[0], pt(-0.3)));
+    assert!(proche(*a.last().unwrap(), pt(-1.2)));
+    for q in a {
+        let (x, y) = ((q[0] - 10.0) / 2.0, (q[1] - 20.0) / 4.0);
+        assert!((x * x + y * y - 1.0).abs() < 1e-9);
+    }
+}
+
+fn spline(poids_milieu: f64, rationnelle: bool) -> Hatch {
+    let mut p = BoundaryPath::new();
+    p.edges.push(BoundaryEdge::Spline(SplineEdge {
+        degree: 2,
+        rational: rationnelle,
+        periodic: false,
+        knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        control_points: vec![
+            Vector3::new(0.0, 0.0, 1.0),
+            Vector3::new(1.0, 2.0, poids_milieu),
+            Vector3::new(2.0, 0.0, 1.0),
+        ],
+        fit_points: vec![],
+        start_tangent: Vector2::new(0.0, 0.0),
+        end_tangent: Vector2::new(0.0, 0.0),
+    }));
+    hachure(vec![p])
+}
+
+fn y_max(h: &Hatch) -> f64 {
+    anneaux_hachure(h, TOL)[0].iter().map(|q| q[1]).fold(f64::MIN, f64::max)
+}
+
+#[test]
+fn spline_rationnelle() {
+    let sans = y_max(&spline(1.0, false));
+    assert!((sans - 1.0).abs() < 1e-6, "Bezier quadratique : sommet a y = 1");
+    // z ignore quand la spline n'est pas rationnelle
+    assert!((y_max(&spline(5.0, false)) - sans).abs() < 1e-12);
+    // poids 5 au milieu : le sommet monte a 2*5/(1+5) = 1,666...
+    assert!((y_max(&spline(5.0, true)) - 10.0 / 6.0).abs() < 1e-3);
+}
+
+#[test]
+fn polyligne_renflee() {
+    let mut e = PolylineEdge::new(vec![], false);
+    e.add_vertex(Vector2::new(0.0, 0.0), 1.0);
+    e.add_vertex(Vector2::new(10.0, 0.0), 0.0);
+    let mut p = BoundaryPath::new();
+    p.edges.push(BoundaryEdge::Polyline(e));
+    let r = anneaux_hachure(&hachure(vec![p]), TOL);
+    assert_eq!(r.len(), 1);
+    let a = &r[0];
+    assert!(proche(a[0], [0.0, 0.0]));
+    assert!(proche(*a.last().unwrap(), [10.0, 0.0]));
+    assert!(a.len() > 8);
+    for q in a {
+        assert!(q[1] < 1e-9, "renflement positif : demi-cercle sous la corde");
+        assert!(((q[0] - 5.0).hypot(q[1]) - 5.0).abs() < 1e-9);
+    }
 }
 
 #[test]
