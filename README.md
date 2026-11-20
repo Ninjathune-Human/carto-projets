@@ -32,3 +32,39 @@ Tout ce qui suit se lance depuis la racine du dépôt. Les ZIP, les DXF et les C
    `python3 tools/emprises.py corpus/resultats/emprises.csv data/limite_metropole.geojson corpus/resultats/emprises.md`
 
 Les trois lecteurs comptent les entités de l'espace objet seulement, hors `ATTRIB`, `SEQEND` et `VERTEX`. Les CSV bruts gardent les noms de types propres à chaque lecteur ; `comparer.py` les ramène aux types DXF d'ezdxf par une seule table (les objets personnalisés et proxys sont regroupés sous `PERSONNALISEE`). Les rapports `lecteurs.md` et `emprises.md` se copient ensuite dans `docs/phase0/`.
+
+## Phase 1a : import de projets et visionneuse
+
+### Ce que fait l'import
+
+L'import prend un ZIP eTransmit, retient le dessin maître, lit ses xréfs et produit une scène vectorielle : traits et surfaces colorés, rangés par calque dans l'ordre d'affichage du dessin. Les calques éteints, gelés, non imprimables ou nommés `Defpoints` sont masqués. La tolérance de corde est de 1 mm réel.
+
+Le moteur ne lit que les types suivants : LINE, LWPOLYLINE, POLYLINE 2D et 3D, ARC, CIRCLE, ELLIPSE, SPLINE, HATCH et MPOLYGON pleins (un dégradé devient une couleur pleine), SOLID, TRACE, INSERT (MINSERT, imbrication, miroir) et xréfs.
+
+### Systèmes reconnus
+
+Le système de coordonnées du plan est reconnu par l'emprise de ses entités, comparée à celle de la Métropole : Lambert 93, CC43, CC44, Lambert II étendu, Lambert III Sud et Lambert III carto. Un plan sans système reconnu est refusé avec le message « Plan non géoréférencé : aucun système reconnu (Lambert 93, CC43, CC44, Lambert II étendu, Lambert III Sud ou carto). ».
+
+Ce qui déborde de la Métropole n'est jamais une erreur : tout est importé et reste visible sous le voile.
+
+### Visionneuse et dépôt sur la carte
+
+- `essais/visionneuse/` : page qui affiche un plan sans fond de carte. Déposer le ZIP, choisir le dessin maître si plusieurs sont possibles, puis parcourir le plan.
+- Sur la carte (`essais/carte/`) : déposer un ZIP directement sur la carte pour y verser le projet.
+
+Le code partagé par les deux pages est dans `essais/commun/`.
+
+### Outils en ligne de commande
+
+- Scène SCN1 d'un ZIP : `cargo run --release -p carto-bench --bin bench -- scene <zip> <sortie.scn>`
+- Aperçu PNG d'une scène : `python3 tools/apercu_scene.py <scene.scn> <apercu.png>`
+
+L'aperçu demande Pillow et numpy : `pip install -r tools/requirements.txt`.
+
+### Limites de la phase 1a
+
+Les textes, les cotes (DIMENSION), les lignes de repère (MULTILEADER), les hachures à motif, les types de ligne et les WIPEOUT ne sont pas dessinés. Ils sont comptés comme ignorés, par nom de type, dans le rapport d'import. Ils sont prévus pour la phase 1b.
+
+### Attribution
+
+La conversion de Lambert II étendu et de Lambert III utilise la grille de changement de repère NTF vers RGF93 `fr_ign_ntf_r93.tif`, produite par l'IGN, publiée sous Licence Ouverte Etalab 2.0 et distribuée via OSGeo/PROJ-data. Elle est versionnée dans `crates/georef/data/`.

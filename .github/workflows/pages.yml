@@ -49,6 +49,7 @@ jobs:
           'essais/banc/test/*.test.mjs'
           'essais/carte/test/*.test.mjs'
           'essais/sources/test/*.test.mjs'
+          'essais/commun/test/*.test.mjs'
           'essais/libredwg/test/*.test.mjs'
       - uses: actions/setup-python@v6
         with:
@@ -66,8 +67,8 @@ jobs:
           mkdir -p _site/essais
           cp index.html banniere.svg catalogue.json _site/
           if [ -d data ]; then cp -r data _site/data; fi
-          cp -r essais/banc essais/carte essais/sources _site/essais/
-          rm -rf _site/essais/carte/test _site/essais/sources/test
+          cp -r essais/banc essais/carte essais/sources essais/visionneuse essais/commun _site/essais/
+          rm -rf _site/essais/carte/test _site/essais/sources/test _site/essais/commun/test _site/essais/visionneuse/test
           python3 -c 'import json, os; print("export const CLE_ESRI = %s;" % json.dumps(os.environ.get("CLE_ESRI", "").strip()))' > _site/essais/carte/config.js
           du -sh _site
       - uses: actions/configure-pages@v6
