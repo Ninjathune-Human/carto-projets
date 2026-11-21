@@ -1,8 +1,12 @@
 // Essai carte : fond Esri, voile et contour de la Métropole, contraintes de navigation,
-// couche WebGL de segments. SDK ArcGIS 5.x chargé par CDN, modules obtenus par $arcgis.import.
+// couche WebGL de segments, et projet ZIP eTransmit importé par le worker wasm puis dessiné par
+// une couche WebGL de scène. SDK ArcGIS 5.x chargé par CDN, modules obtenus par $arcgis.import.
 
 import { echelleMini, lireLignes, genererSegments, contourMercator, anneauxContrainte, anneauxVoile } from "./outils.js";
 import { creerCoucheLignes } from "./couche-lignes.js";
+import { creerCoucheScene } from "./couche-scene.js";
+import { empriseACadrer } from "../commun/rendu-scene.js";
+import { creerImporteur, ecouterDepot, estZip } from "../commun/import-projet.js";
 
 // Version épinglée du SDK : seul endroit où elle figure.
 const VERSION_SDK = "5.2";
@@ -30,6 +34,7 @@ const MSG_FOND_NEUTRE = "Clé Esri absente ou refusée : fond neutre";
 const $ = id => document.getElementById(id);
 const entier = new Intl.NumberFormat("fr-FR");
 const decimal = new Intl.NumberFormat("fr-FR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+const pluriel = (n, mot) => `${entier.format(n)} ${mot}${n >= 2 ? "s" : ""}`;
 const couleurFond = () => getComputedStyle(document.documentElement).getPropertyValue("--fond").trim() || "#f7f6f2";
 
 // ---------------------------------------------------------------- messages
@@ -53,13 +58,13 @@ addEventListener("unhandledrejection", e => {
 
 // ---------------------------------------------------------------- panneau
 
-$("encoche").addEventListener("click", () => {
-  const bouton = $("encoche");
-  const ouvert = bouton.getAttribute("aria-expanded") === "true";
-  bouton.setAttribute("aria-expanded", String(!ouvert));
-  bouton.title = ouvert ? "Déplier le panneau" : "Replier le panneau";
-  $("corps").hidden = ouvert;
-});
+const encoche = $("encoche");
+function plier(ouvrir) {
+  encoche.setAttribute("aria-expanded", String(ouvrir));
+  encoche.title = ouvrir ? "Replier le panneau" : "Déplier le panneau";
+  $("corps").hidden = !ouvrir;
+}
+encoche.addEventListener("click", () => plier(encoche.getAttribute("aria-expanded") !== "true"));
 
 function lireCleStockee() {
   try { return (localStorage.getItem(CLE_STOCKEE) || "").trim(); } catch { return ""; }
@@ -108,6 +113,19 @@ function boucle(t) {
   requestAnimationFrame(boucle);
 }
 requestAnimationFrame(t => { debutSeconde = t; requestAnimationFrame(boucle); });
+
+// ---------------------------------------------------------------- dépôt d'un fichier sur la carte
+
+let ouvrirFichier = null; // fournie quand la carte est prête
+
+ecouterDepot($("carte"), fichiers => {
+  if (fichiers.length === 0) return;
+  if (!ouvrirFichier) {
+    message("plan", "Carte non prête : fichier ignoré", true);
+    return;
+  }
+  ouvrirFichier(fichiers.find(estZip) || fichiers[0]);
+});
 
 // ---------------------------------------------------------------- chargements
 
@@ -200,14 +218,21 @@ async function demarrer() {
   ]);
   if (cle) config.apiKey = cle;
 
-  // Couches, de bas en haut : plan (WebGL), voile, contour. Le fond est en dessous.
+  // Couches, de bas en haut : plan (WebGL), projet (WebGL), voile, contour. Le fond est en dessous.
+  // Ce qui sort de la Métropole reste ainsi sous le voile.
+  const construction = (nb, ms) => { $("duree-construction").textContent = `${entier.format(nb)} en ${decimal.format(ms)} ms`; };
   const plan = creerCoucheLignes({ Layer, BaseLayerViewGL2D, TileInfo }, {
     rendu(ms, nbTuiles) { mesures.rendus++; mesures.dureeRendus += ms; mesures.tuiles = nbTuiles; },
-    construction(nb, ms) { $("duree-construction").textContent = `${entier.format(nb)} en ${decimal.format(ms)} ms`; },
+    construction,
     erreur(e) { message("plan", "Couche WebGL indisponible : " + e.message, true); },
+  });
+  const projet = creerCoucheScene({ Layer, BaseLayerViewGL2D, TileInfo }, {
+    construction,
+    erreur(e) { message("projet", "Couche WebGL du projet indisponible : " + e.message, true); },
   });
   const carte = new EsriMap();
   carte.add(plan.couche);
+  carte.add(projet.couche);
 
   const contour = await promesseContour;
   const conteneur = $("carte");
@@ -293,6 +318,7 @@ async function demarrer() {
 
   vue.on("layerview-create-error", ev => {
     if (ev.layer === plan.couche) message("plan", "Couche WebGL indisponible", true);
+    else if (ev.layer === projet.couche) message("projet", "Couche WebGL du projet indisponible", true);
     else if (estDuFond(ev.layer)) fondRefuse(ev.error);
     else message("couche-" + ev.layer?.title, `Couche « ${ev.layer?.title} » indisponible`, true);
   });
@@ -332,6 +358,14 @@ async function demarrer() {
   }
 
   // ------------------------------------------------------------ données du plan
+  // Emprise [xmin, ymin, xmax, ymax] en Web Mercator, avec 10 % de marge.
+  function cadrer([xmin, ymin, xmax, ymax]) {
+    const marge = 0.1 * Math.max(xmax - xmin, ymax - ymin) || 50;
+    vue.goTo(new Extent({
+      xmin: xmin - marge, ymin: ymin - marge, xmax: xmax + marge, ymax: ymax + marge, spatialReference: SR,
+    })).catch(() => { /* animation interrompue */ });
+  }
+
   function definirPlan(polylignes, libelle) {
     const t = performance.now();
     const index = plan.definir(polylignes);
@@ -343,28 +377,75 @@ async function demarrer() {
     }
     message("plan", `${libelle} : ${entier.format(index.nbSegments)} segments indexés en ${entier.format(Math.round(ms))} ms`);
     const e = index.etendue;
-    const marge = 0.1 * Math.max(e.xmax - e.xmin, e.ymax - e.ymin) || 50;
-    vue.goTo(new Extent({
-      xmin: e.xmin - marge, ymin: e.ymin - marge, xmax: e.xmax + marge, ymax: e.ymax + marge, spatialReference: SR,
-    })).catch(() => { /* animation interrompue */ });
+    cadrer([e.xmin, e.ymin, e.xmax, e.ymax]);
   }
+
+  async function ouvrirLignes(f) {
+    // La liste des dessins maîtres d'un ZIP précédent réimporterait ce ZIP : on la masque.
+    $("maitres").hidden = true;
+    message("plan", `Lecture de ${f.name}…`);
+    try {
+      definirPlan(lireLignes(await f.arrayBuffer()), f.name);
+    } catch (e) {
+      message("plan", `${f.name} : ${e.message}`, true);
+    }
+  }
+
+  // ------------------------------------------------------------ projet (ZIP eTransmit)
+  const importer = creerImporteur({
+    repere: "mercator",
+    message: (texte, alerte) => message("projet", texte, alerte),
+    ouvrirScene,
+    maitres: $("maitres"),
+    listeMaitres: $("liste-maitres"),
+    choixPropose: () => plier(true),
+  });
+
+  function ouvrirScene(scene, nomFichier, ms) {
+    const index = projet.definirScene(scene);
+    let nbTraits = 0;
+    for (const p of scene.primitives) if (p.genre === "trait") nbTraits++;
+    const nom = scene.rapport?.maitre || nomFichier;
+    const e = index.etendue;
+    if (!(e.xmin <= e.xmax)) {
+      message("projet", `${nom} : aucune primitive à afficher`, true);
+      return;
+    }
+    // Un objet égaré loin du plan ne réduit pas le plan à un point (même règle que la visionneuse).
+    cadrer(empriseACadrer(scene.rapport, [e.xmin, e.ymin, e.xmax, e.ymax]));
+    const systeme = scene.rapport?.systeme ? ` (${scene.rapport.systeme})` : "";
+    message("projet", `${nom}${systeme} : ${pluriel(nbTraits, "trait")} et ${pluriel(scene.primitives.length - nbTraits, "surface")}, importé en ${entier.format(Math.round(ms))} ms`);
+  }
+
+  // ------------------------------------------------------------ ouverture d'un fichier (bouton ou dépôt)
+  // ZIP ou .lignes, reconnu à l'extension, au type, ou à défaut à la signature.
+  async function nature(f) {
+    if (estZip(f)) return "zip";
+    if (/\.lignes$/i.test(f.name)) return "lignes";
+    try {
+      const o = new Uint8Array(await f.slice(0, 4).arrayBuffer());
+      if (o[0] === 0x50 && o[1] === 0x4b) return "zip"; // PK
+      if (o[0] === 0x4c && o[1] === 0x49 && o[2] === 0x47 && o[3] === 0x30) return "lignes"; // LIG0
+    } catch { /* illisible : format inconnu */ }
+    return null;
+  }
+
+  ouvrirFichier = async f => {
+    const n = await nature(f);
+    if (n === "zip") importer(f);
+    else if (n === "lignes") ouvrirLignes(f);
+    else message("plan", `${f.name} : format non reconnu, projet .zip ou fichier .lignes attendu`, true);
+  };
 
   const fichier = $("fichier");
   const generer = $("generer");
   fichier.disabled = false;
   generer.disabled = false;
 
-  fichier.addEventListener("change", async () => {
+  fichier.addEventListener("change", () => {
     const f = fichier.files && fichier.files[0];
-    if (!f) return;
-    message("plan", `Lecture de ${f.name}…`);
-    try {
-      definirPlan(lireLignes(await f.arrayBuffer()), f.name);
-    } catch (e) {
-      message("plan", `${f.name} : ${e.message}`, true);
-    } finally {
-      fichier.value = "";
-    }
+    fichier.value = "";
+    if (f) ouvrirFichier(f);
   });
 
   generer.addEventListener("click", () => {

@@ -12,18 +12,18 @@ pub struct Inventaire {
     pub autres: Vec<String>,
 }
 
-fn normaliser(nom: &str) -> String {
+pub(crate) fn normaliser(nom: &str) -> String {
     nom.replace('\\', "/")
 }
 
-fn nom_de<R: Read>(entree: &zip::read::ZipFile<'_, R>) -> Result<String, ErreurCad> {
+pub(crate) fn nom_de<R: Read>(entree: &zip::read::ZipFile<'_, R>) -> Result<String, ErreurCad> {
     entree
         .name()
         .map(|n| n.into_owned())
         .map_err(|e| ErreurCad::Zip(e.to_string()))
 }
 
-fn ouvrir(octets: &[u8]) -> Result<ZipArchive<Cursor<&[u8]>>, ErreurCad> {
+pub(crate) fn ouvrir(octets: &[u8]) -> Result<ZipArchive<Cursor<&[u8]>>, ErreurCad> {
     ZipArchive::new(Cursor::new(octets)).map_err(|e| ErreurCad::Zip(e.to_string()))
 }
 

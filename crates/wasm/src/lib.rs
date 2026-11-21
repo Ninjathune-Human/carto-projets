@@ -1,7 +1,12 @@
 //! Crate wasm de carto-projets : mesure des DWG d'un ZIP eTransmit dans le navigateur, un DWG par appel
 //! (un piège wasm ne coûte ainsi que le DWG en cours, voir R15).
 
-use carto_cad::{inventorier, lire_entree, mesurer, Mesure};
+use carto_cad::proprietes::metres_par_unite;
+use carto_cad::{
+    aplatir, aplatir_avec_tolerance, charger_dessins, choisir_maitre, ecrire_scene, inventorier, lire_entree, mesurer, ErreurCad,
+    Mesure, Primitive, Scene,
+};
+use carto_georef::{reconnaitre_primitives, Convertisseur, Reconnaissance};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 use web_time::Instant;
@@ -58,4 +63,145 @@ pub fn lister_dwg(octets: &[u8]) -> Result<String, JsError> {
 #[wasm_bindgen]
 pub fn mesurer_dwg(octets: &[u8], chemin: &str) -> Result<String, JsError> {
     mesurer_dwg_json(octets, chemin).map_err(|m| JsError::new(&m))
+}
+
+/// Repère de sortie de la scène importée.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Repere {
+    L93,
+    Mercator,
+}
+
+impl Repere {
+    /// `"l93"` ou `"mercator"`.
+    pub fn depuis(texte: &str) -> Option<Self> {
+        match texte {
+            "l93" => Some(Self::L93),
+            "mercator" => Some(Self::Mercator),
+            _ => None,
+        }
+    }
+}
+
+const MESSAGE_NON_GEOREFERENCE: &str =
+    "Plan non géoréférencé : aucun système reconnu (Lambert 93, CC43, CC44, Lambert II étendu, Lambert III Sud ou carto).";
+
+const MESSAGE_RECALCUL: &str =
+    "Unités du dessin (INSUNITS) différentes des unités reconnues : tolérance de corde recalculée.";
+
+/// Reconnaissance du système par vote des primitives de la scène (unités du dessin).
+fn reconnaitre_scene(scene: &Scene) -> Option<(Reconnaissance, [f64; 4], f64)> {
+    let groupes: Vec<&[[f64; 2]]> = scene
+        .primitives
+        .iter()
+        .map(|p| match p {
+            Primitive::Trait { points, .. } => points.as_slice(),
+            Primitive::Surface { triangles, .. } => triangles.as_slice(),
+        })
+        .collect();
+    reconnaitre_primitives(&groupes)
+}
+
+fn erreur_json(code: &str, message: &str) -> String {
+    serde_json::json!({ "code": code, "message": message }).to_string()
+}
+
+fn lecture(message: impl std::fmt::Display) -> String {
+    erreur_json("lecture", &message.to_string())
+}
+
+/// Importe un ZIP eTransmit : aplatissement, reconnaissance du système par vote des primitives
+/// (au moins 10 % ; un avertissement sous la moitié), nouvel aplatissement à 1 mm réel si les
+/// unités reconnues contredisent INSUNITS, conversion de chaque point (dans le repère demandé)
+/// puis écriture SCN1.
+/// L'erreur est une chaîne JSON `{"code", …}`.
+pub fn importer_zip_scn(octets: &[u8], repere: Repere, maitre: Option<&str>) -> Result<Vec<u8>, String> {
+    let erreur_cad = |e: ErreurCad| match e {
+        ErreurCad::AucunDwg => serde_json::json!({ "code": "aucun_dwg" }).to_string(),
+        ErreurCad::PlusieursMaitres(c) => serde_json::json!({ "code": "plusieurs_maitres", "candidats": c }).to_string(),
+        e => lecture(e),
+    };
+    let dessins = charger_dessins(octets).map_err(erreur_cad)?;
+    let maitre = choisir_maitre(&dessins, maitre).map_err(erreur_cad)?;
+    let mut a = aplatir(&dessins, &maitre).map_err(erreur_cad)?;
+    let (reco, mut emprise, mut part) =
+        reconnaitre_scene(&a.scene).ok_or_else(|| erreur_json("non_georeference", MESSAGE_NON_GEOREFERENCE))?;
+    // La tolérance de corde vient d'INSUNITS : si les unités reconnues le contredisent (gabarit en mm
+    // pour un plan en m, par exemple), le maître est aplati de nouveau à 1 mm réel, sans relire les DWG.
+    let declare = dessins.docs.get(&maitre).map_or(1.0, |d| metres_par_unite(d.header.insertion_units));
+    if (reco.facteur - declare).abs() > 1e-9 * reco.facteur.max(declare) {
+        a = aplatir_avec_tolerance(&dessins, &maitre, Some(0.001 / reco.facteur)).map_err(erreur_cad)?;
+        // Les voix ne changent pas avec la discrétisation ; l'emprise essentielle, si.
+        if let Some((_, e, p)) = reconnaitre_scene(&a.scene).filter(|(r, _, _)| *r == reco) {
+            (emprise, part) = (e, p);
+        }
+        a.rapport.avertissements.push(MESSAGE_RECALCUL.to_string());
+    }
+    a.rapport.facteur = Some(reco.facteur);
+    if part < 0.5 {
+        let hors = ((1.0 - part) * 100.0).round() as u32;
+        a.rapport.avertissements.push(format!("Une partie du dessin ({hors} %) est hors de l'emprise du système reconnu."));
+    }
+    let facteur = reco.facteur;
+    let conv = Convertisseur::nouveau(reco).map_err(lecture)?;
+    a.rapport.systeme = Some(reco.systeme.nom().to_string());
+
+    let convertir = |x: f64, y: f64| {
+        let (x, y) = (x * facteur, y * facteur);
+        match repere {
+            Repere::L93 => conv.vers_l93(x, y),
+            Repere::Mercator => conv.vers_mercator(x, y),
+        }
+    };
+    // Emprise essentielle (unités du dessin) : ses quatre coins convertis, puis leur boîte.
+    // Un coin non convertible laisse l'emprise inconnue.
+    let [x0, y0, x1, y1] = emprise;
+    a.rapport.emprise = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+        .into_iter()
+        .map(|(x, y)| convertir(x, y).ok().filter(|(x, y)| x.is_finite() && y.is_finite()))
+        .collect::<Option<Vec<(f64, f64)>>>()
+        .map(|coins| {
+            coins.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |e, &(x, y)| {
+                [e[0].min(x), e[1].min(y), e[2].max(x), e[3].max(y)]
+            })
+        });
+
+    let mut perdus = 0usize;
+    for p in a.scene.points_mut() {
+        match convertir(p[0], p[1]) {
+            Ok((x, y)) if x.is_finite() && y.is_finite() => *p = [x, y],
+            _ => {
+                *p = [f64::NAN, f64::NAN];
+                perdus += 1;
+            }
+        }
+    }
+    if perdus > 0 {
+        a.scene.primitives = std::mem::take(&mut a.scene.primitives)
+            .into_iter()
+            .filter_map(|prim| match prim {
+                Primitive::Trait { calque, couleur, epaisseur_mm, points } => {
+                    let points: Vec<[f64; 2]> = points.into_iter().filter(|p| p[0].is_finite()).collect();
+                    (points.len() >= 2).then_some(Primitive::Trait { calque, couleur, epaisseur_mm, points })
+                }
+                Primitive::Surface { calque, couleur, triangles } => {
+                    let triangles: Vec<[f64; 2]> = triangles
+                        .chunks(3)
+                        .filter(|t| t.len() == 3 && t.iter().all(|p| p[0].is_finite()))
+                        .flatten()
+                        .copied()
+                        .collect();
+                    (!triangles.is_empty()).then_some(Primitive::Surface { calque, couleur, triangles })
+                }
+            })
+            .collect();
+        a.rapport.avertissements.push(format!("{perdus} points hors de la grille de conversion"));
+    }
+    Ok(ecrire_scene(&a.scene, &a.rapport))
+}
+
+#[wasm_bindgen]
+pub fn importer_zip(octets: &[u8], repere: &str, maitre: Option<String>) -> Result<Vec<u8>, JsError> {
+    let repere = Repere::depuis(repere).ok_or_else(|| JsError::new(&lecture(format!("repère inconnu : {repere}"))))?;
+    importer_zip_scn(octets, repere, maitre.as_deref()).map_err(|m| JsError::new(&m))
 }

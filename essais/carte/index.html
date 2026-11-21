@@ -19,6 +19,10 @@
     line-height: 1.45; -webkit-font-smoothing: antialiased;
   }
   #carte { position: fixed; inset: 0; background: var(--fond); }
+  #carte.depot::after {
+    content: ""; position: absolute; inset: .5rem; z-index: 5; pointer-events: none;
+    border: 2px dashed #1c1c1a;
+  }
 
   #panneau {
     position: fixed; z-index: 10;
@@ -65,6 +69,7 @@
   .ligne + .ligne, .ligne + .bascule, .bascule + .ligne { margin-top: .5rem; }
   .ligne > input[type=password], .ligne > input[type=number] { flex: 1; min-width: 0; }
   .ligne > .etiquette { color: var(--gris); }
+  .aide { clear: both; margin: .4rem 0 0; color: var(--gris); font-size: .8rem; }
 
   input[type=password], input[type=number] {
     min-height: 44px; padding: 0 .6rem; font: inherit; font-size: 16px; /* 16 px : pas de zoom automatique sur iPhone */
@@ -93,6 +98,12 @@
   .bascule input:checked + label { background: var(--encre); color: var(--fond); }
   .bascule input:focus-visible + label { outline: 2px solid var(--encre); outline-offset: 2px; }
   .bascule input:disabled + label { opacity: .4; cursor: default; }
+
+  /* Choix du dessin maître */
+  #maitres { clear: both; margin-top: .6rem; }
+  #maitres p { margin: 0 0 .4rem; }
+  #maitres ul { margin: 0; padding: 0; list-style: none; display: grid; gap: .4rem; }
+  #maitres button { width: 100%; justify-content: flex-start; white-space: normal; text-align: left; overflow-wrap: anywhere; padding: .5rem .75rem; }
 
   @media (prefers-color-scheme: dark) {
     :root { --fond:#161614; --encre:#ecebe6; --gris:#9a978e; --filet:#34332f; --alerte:#e08a8a; }
@@ -141,13 +152,18 @@
       <legend>Plan</legend>
       <div class="ligne">
         <input type="file" id="fichier" disabled>
-        <label class="bouton" for="fichier">Ouvrir un fichier .lignes</label>
+        <label class="bouton" for="fichier">Ouvrir un projet (.zip ou .lignes)</label>
       </div>
       <div class="ligne">
         <span class="etiquette">N</span>
         <input id="nombre" type="number" min="1" max="5000000" step="1" value="500000" inputmode="numeric"
                aria-label="Nombre de segments à générer">
         <button id="generer" type="button" disabled>Générer</button>
+      </div>
+      <p class="aide">Le ZIP eTransmit peut aussi être déposé sur la carte.</p>
+      <div id="maitres" hidden>
+        <p>Dessin maître à importer :</p>
+        <ul id="liste-maitres"></ul>
       </div>
     </fieldset>
   </div>
