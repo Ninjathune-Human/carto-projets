@@ -248,3 +248,176 @@ export function indexerSegments(polylignes) {
 
   return { nbSegments: nb, etendue, x0, y0, x1, y1, chercher };
 }
+
+const CASES_MAX_PAR_PRIMITIVE = 64;
+
+/**
+ * Index en grille uniforme des primitives d'une scène (lireScene : `points` à plat x, y, x, y…),
+ * par emprise de primitive : même rôle qu'indexerSegments pour la couche de la scène.
+ * Seuls les points finis comptent ; une primitive sans point fini n'est jamais trouvée.
+ * chercher(xmin, ymin, xmax, ymax) renvoie, sans doublon et dans l'ordre de la scène, les numéros
+ * des primitives dont l'emprise touche le rectangle (vue réutilisée : valable jusqu'à l'appel
+ * suivant). caseDe(x, y) et primitivesDeCase(c) exposent la grille (cote × cote cases) ; une
+ * primitive qui couvre plus de 64 cases est rangée à part et n'apparaît dans aucune case.
+ */
+export function indexerPrimitives(scene) {
+  const prims = scene.primitives;
+  const nb = prims.length;
+  const boites = new Float64Array(nb * 4).fill(NaN); // xmin, ymin, xmax, ymax par primitive
+  const etendue = { xmin: Infinity, ymin: Infinity, xmax: -Infinity, ymax: -Infinity };
+  let nbIndexees = 0;
+  for (let k = 0; k < nb; k++) {
+    const p = prims[k].points;
+    let xmin = Infinity, ymin = Infinity, xmax = -Infinity, ymax = -Infinity;
+    for (let i = 0; i + 1 < p.length; i += 2) {
+      const x = p[i], y = p[i + 1];
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      if (x < xmin) xmin = x;
+      if (y < ymin) ymin = y;
+      if (x > xmax) xmax = x;
+      if (y > ymax) ymax = y;
+    }
+    if (xmin > xmax) continue;
+    boites[k * 4] = xmin; boites[k * 4 + 1] = ymin; boites[k * 4 + 2] = xmax; boites[k * 4 + 3] = ymax;
+    if (xmin < etendue.xmin) etendue.xmin = xmin;
+    if (ymin < etendue.ymin) etendue.ymin = ymin;
+    if (xmax > etendue.xmax) etendue.xmax = xmax;
+    if (ymax > etendue.ymax) etendue.ymax = ymax;
+    nbIndexees++;
+  }
+  const indexee = k => boites[k * 4] <= boites[k * 4 + 2]; // faux pour NaN
+
+  // Environ une primitive par case.
+  const cote = Math.max(1, Math.min(1024, Math.ceil(Math.sqrt(nbIndexees))));
+  const largeurCase = nbIndexees ? (etendue.xmax - etendue.xmin) / cote || 1 : 1;
+  const hauteurCase = nbIndexees ? (etendue.ymax - etendue.ymin) / cote || 1 : 1;
+  const colonne = x => Math.max(0, Math.min(cote - 1, Math.floor((x - etendue.xmin) / largeurCase)));
+  const rangee = y => Math.max(0, Math.min(cote - 1, Math.floor((y - etendue.ymin) / hauteurCase)));
+
+  const debuts = new Uint32Array(cote * cote + 1);
+  const longues = [];
+  const plage = new Int32Array(4);
+  const cases = k => {
+    plage[0] = colonne(boites[k * 4]); plage[1] = colonne(boites[k * 4 + 2]);
+    plage[2] = rangee(boites[k * 4 + 1]); plage[3] = rangee(boites[k * 4 + 3]);
+    return (plage[1] - plage[0] + 1) * (plage[3] - plage[2] + 1);
+  };
+  const estLongue = new Uint8Array(nb);
+  for (let k = 0; k < nb; k++) {
+    if (!indexee(k)) continue;
+    if (cases(k) > CASES_MAX_PAR_PRIMITIVE) { estLongue[k] = 1; longues.push(k); continue; }
+    for (let j = plage[2]; j <= plage[3]; j++) for (let i = plage[0]; i <= plage[1]; i++) debuts[j * cote + i + 1]++;
+  }
+  for (let c = 1; c < debuts.length; c++) debuts[c] += debuts[c - 1];
+  const contenu = new Uint32Array(debuts[debuts.length - 1]);
+  const curseur = debuts.slice(0, cote * cote);
+  for (let k = 0; k < nb; k++) {
+    if (!indexee(k) || estLongue[k]) continue;
+    cases(k);
+    for (let j = plage[2]; j <= plage[3]; j++) for (let i = plage[0]; i <= plage[1]; i++) contenu[curseur[j * cote + i]++] = k;
+  }
+
+  const marque = new Uint32Array(nb);
+  const resultat = new Uint32Array(nb);
+  let requete = 0;
+  const touche = (k, xmin, ymin, xmax, ymax) =>
+    boites[k * 4] <= xmax && boites[k * 4 + 2] >= xmin && boites[k * 4 + 1] <= ymax && boites[k * 4 + 3] >= ymin;
+
+  function chercher(xmin, ymin, xmax, ymax) {
+    let n = 0;
+    if (nbIndexees === 0 || xmax < etendue.xmin || xmin > etendue.xmax || ymax < etendue.ymin || ymin > etendue.ymax) {
+      return resultat.subarray(0, 0);
+    }
+    requete = (requete + 1) >>> 0;
+    if (requete === 0) { marque.fill(0); requete = 1; }
+    const i0 = colonne(xmin), i1 = colonne(xmax), j0 = rangee(ymin), j1 = rangee(ymax);
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) {
+        const c = j * cote + i;
+        for (let e = debuts[c]; e < debuts[c + 1]; e++) {
+          const k = contenu[e];
+          if (marque[k] === requete) continue;
+          marque[k] = requete;
+          if (touche(k, xmin, ymin, xmax, ymax)) resultat[n++] = k;
+        }
+      }
+    }
+    for (const k of longues) if (touche(k, xmin, ymin, xmax, ymax)) resultat[n++] = k;
+    return resultat.subarray(0, n).sort(); // ordre de la scène = ordre d'affichage
+  }
+
+  return {
+    nbPrimitives: nb,
+    etendue,
+    boites,
+    cote,
+    caseDe: (x, y) => rangee(y) * cote + colonne(x),
+    primitivesDeCase: c => contenu.subarray(debuts[c], debuts[c + 1]),
+    chercher,
+  };
+}
+
+/** Octets par sommet de la couche de la scène : x, y, autre x, autre y, côté, épaisseur (f32), r, v, b, a (u8). */
+export const FOULEE_SCENE = 28;
+
+/**
+ * Range les tampons d'une tuile (preparerTampons, essais/commun/rendu-scene.js) en une seule liste
+ * de triangles dans l'ordre de la scène : chaque triangle de surface et chaque segment de trait
+ * (deux triangles, six sommets) prend place selon le rang de sa primitive. Un seul appel de dessin
+ * peint ainsi les primitives dans l'ordre d'AutoCAD, sans tampon de profondeur.
+ * Sommet : FOULEE_SCENE octets ; une surface a un côté nul (le shader ne l'élargit pas) et
+ * son « autre » point égal à sa position.
+ * Rend { donnees: ArrayBuffer, nbSommets }.
+ */
+export function entrelacerScene(tampons) {
+  const S = tampons.surfaces;
+  const T = tampons.traits;
+  const nbTriangles = S.nombre / 3;
+  const nbSegments = T.nombre / 4;
+  const nbSommets = S.nombre + nbSegments * 6;
+  const donnees = new ArrayBuffer(nbSommets * FOULEE_SCENE);
+  const f = new Float32Array(donnees);
+  const o = new Uint8Array(donnees);
+  const pas = FOULEE_SCENE / 4;
+  let v = 0;
+  const couleur = (couleurs, k) => {
+    const b = v * FOULEE_SCENE + 24;
+    o[b] = couleurs[k * 4];
+    o[b + 1] = couleurs[k * 4 + 1];
+    o[b + 2] = couleurs[k * 4 + 2];
+    o[b + 3] = couleurs[k * 4 + 3];
+  };
+  const surface = k => {
+    const b = v * pas;
+    f[b] = f[b + 2] = S.positions[k * 2];
+    f[b + 1] = f[b + 3] = S.positions[k * 2 + 1];
+    couleur(S.couleurs, k);
+    v++;
+  };
+  const trait = k => {
+    const b = v * pas;
+    f[b] = T.positions[k * 2];
+    f[b + 1] = T.positions[k * 2 + 1];
+    f[b + 2] = T.autres[k * 2];
+    f[b + 3] = T.autres[k * 2 + 1];
+    f[b + 4] = T.cotes[k];
+    f[b + 5] = T.epaisseurs[k];
+    couleur(T.couleurs, k);
+    v++;
+  };
+  // Fusion de deux suites déjà rangées par rang (une primitive est soit surface, soit trait).
+  let i = 0;
+  let j = 0;
+  while (i < nbTriangles || j < nbSegments) {
+    if (j >= nbSegments || (i < nbTriangles && S.rangs[i * 3] < T.rangs[j * 4])) {
+      surface(i * 3);
+      surface(i * 3 + 1);
+      surface(i * 3 + 2);
+      i++;
+    } else {
+      for (let e = j * 6; e < j * 6 + 6; e++) trait(T.indices[e]);
+      j++;
+    }
+  }
+  return { donnees, nbSommets };
+}

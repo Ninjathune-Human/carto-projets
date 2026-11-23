@@ -76,4 +76,366 @@ mod wasm {
         assert!(casse.contains("\"chemin\":\"b.dwg\",\"duree_ms\":"));
         assert!(casse.contains("\"erreur\""));
     }
+
+    /// Import complet compilé en wasm32 : carto-georef, proj4rs, lyon, i_overlay.
+    #[wasm_bindgen_test]
+    fn importe_un_plan_l93_en_memoire() {
+        verifier_import_l93(&importer_zip(&zip_nice(), "l93", None).unwrap());
+    }
+
+    /// La grille NTF → RGF93 (proj4rs, `tiff`) chargée depuis les octets en wasm.
+    #[wasm_bindgen_test]
+    fn importe_un_plan_lambert_ii_etendu_par_la_grille() {
+        verifier_import_l2e(&importer_zip(&zip_l2e(), "l93", None).unwrap());
+    }
+}
+
+// --- Import complet (ZIP -> SCN1 converti) ---
+
+/// DWG en mémoire (mètres) fait de lignes `[x1, y1, x2, y2]`.
+fn dwg(lignes: &[[f64; 4]]) -> Vec<u8> {
+    use acadrust::{CadDocument, DwgWriter, EntityType, Line};
+    let mut doc = CadDocument::new();
+    doc.header.insertion_units = 6;
+    for l in lignes {
+        doc.add_entity(EntityType::Line(Line::from_coords(l[0], l[1], 0., l[2], l[3], 0.))).unwrap();
+    }
+    DwgWriter::write_to_vec(&doc).unwrap()
+}
+
+// Deux lignes à Nice, Lambert 93.
+const NICE: [[f64; 4]; 2] = [[1_042_000., 6_298_000., 1_042_100., 6_298_050.], [1_042_100., 6_298_050., 1_042_150., 6_298_200.]];
+
+fn zip_nice() -> Vec<u8> {
+    zip_de_test(&[("plan.dwg", &dwg(&NICE))])
+}
+
+fn u32_a(o: &[u8], i: usize) -> u32 {
+    u32::from_le_bytes(o[i..i + 4].try_into().unwrap())
+}
+
+/// Lit le SCN1 : (nombre de traits, premier point du premier trait, rapport JSON).
+fn lire(scn: &[u8]) -> (usize, [f64; 2], serde_json::Value) {
+    assert_eq!(&scn[..4], b"SCN1");
+    let mut i = 4;
+    let nc = u32_a(scn, i) as usize;
+    i += 4;
+    for _ in 0..nc {
+        let n = u32_a(scn, i) as usize;
+        i += 4 + n + 4;
+    }
+    let np = u32_a(scn, i) as usize;
+    i += 4;
+    let mut premier = [0.; 2];
+    for k in 0..np {
+        assert_eq!(scn[i], 0, "trait attendu");
+        i += 1 + 4 + 4 + 4;
+        let n = u32_a(scn, i) as usize;
+        i += 4;
+        if k == 0 {
+            premier = [
+                f64::from_le_bytes(scn[i..i + 8].try_into().unwrap()),
+                f64::from_le_bytes(scn[i + 8..i + 16].try_into().unwrap()),
+            ];
+        }
+        i += 16 * n;
+    }
+    let nr = u32_a(scn, i) as usize;
+    i += 4;
+    (np, premier, serde_json::from_slice(&scn[i..i + nr]).unwrap())
+}
+
+// Corps des essais de l'import compilé en wasm (R15), lancés aussi en natif par la même API
+// `importer_zip` (son chemin de succès ne touche aucune valeur JavaScript).
+
+/// Plan Lambert 93 en mémoire : système reconnu, facteur 1, points inchangés.
+fn verifier_import_l93(scn: &[u8]) {
+    let (n, p, rapport) = lire(scn);
+    assert_eq!(n, 2);
+    assert!((p[0] - 1_042_000.).abs() < 1e-6 && (p[1] - 6_298_000.).abs() < 1e-6, "{p:?}");
+    assert_eq!(rapport["systeme"], "Lambert 93");
+    assert_eq!(rapport["facteur"], serde_json::json!(1.0));
+}
+
+/// Premier point Lambert II étendu de la référence pyproj (grille NTF → RGF93) et son image en Lambert 93.
+fn reference_l2e() -> ([f64; 2], [f64; 2]) {
+    let csv = include_str!("../../georef/tests/fixtures/conversions.csv");
+    let l = csv.lines().find(|l| l.starts_with("Lambert II étendu,")).expect("ligne Lambert II étendu");
+    let v: Vec<f64> = l.split(',').skip(1).map(|c| c.parse().unwrap()).collect();
+    ([v[0], v[1]], [v[2], v[3]])
+}
+
+/// ZIP d'un plan Lambert II étendu : une ligne qui part du point de référence.
+fn zip_l2e() -> Vec<u8> {
+    let ([x, y], _) = reference_l2e();
+    zip_de_test(&[("plan.dwg", &dwg(&[[x, y, x + 100., y + 50.]]))])
+}
+
+/// Plan Lambert II étendu : reconnu, et converti par la grille à moins de 1 mm de la référence.
+fn verifier_import_l2e(scn: &[u8]) {
+    let (_, l93) = reference_l2e();
+    let (n, p, rapport) = lire(scn);
+    assert_eq!(n, 1);
+    assert_eq!(rapport["systeme"], "Lambert II étendu");
+    assert!((p[0] - l93[0]).abs() < 1e-3 && (p[1] - l93[1]).abs() < 1e-3, "{p:?} au lieu de {l93:?}");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn import_par_l_api_wasm_l93() {
+    verifier_import_l93(&importer_zip(&zip_nice(), "l93", None).unwrap());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn import_par_l_api_wasm_l2e() {
+    verifier_import_l2e(&importer_zip(&zip_l2e(), "l93", None).unwrap());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+mod import {
+    use super::*;
+    use acadrust::{CadDocument, Circle, DwgWriter, EntityType};
+
+    #[test]
+    fn importe_un_plan_l93() {
+        let scn = importer_zip_scn(&zip_nice(), Repere::L93, None).unwrap();
+        let (n, p, rapport) = lire(&scn);
+        assert_eq!(n, 2);
+        assert!((p[0] - 1_042_000.).abs() < 1e-6 && (p[1] - 6_298_000.).abs() < 1e-6);
+        assert_eq!(rapport["systeme"], "Lambert 93");
+    }
+
+    #[test]
+    fn mercator_proche_de_l93_vers_mercator() {
+        let scn = importer_zip_scn(&zip_nice(), Repere::Mercator, None).unwrap();
+        let (_, p, _) = lire(&scn);
+        let (x, y) = carto_georef::l93_vers_mercator(1_042_000., 6_298_000.).unwrap();
+        assert!((p[0] - x).abs() < 1e-6 && (p[1] - y).abs() < 1e-6);
+    }
+
+    #[test]
+    fn objet_egare_importe() {
+        let mut l = NICE.to_vec();
+        l.push([0., 0., 0., 0.]);
+        let z = zip_de_test(&[("plan.dwg", &dwg(&l))]);
+        let scn = importer_zip_scn(&z, Repere::L93, None).unwrap();
+        let (n, _, rapport) = lire(&scn);
+        assert_eq!(n, 3);
+        assert_eq!(rapport["systeme"], "Lambert 93");
+    }
+
+    fn avertissements(rapport: &serde_json::Value) -> Vec<String> {
+        rapport["avertissements"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect()
+    }
+
+    #[test]
+    fn part_hors_emprise_signalee_sous_la_moitie() {
+        // 3 lignes en Lambert 93, 7 près de l'origine : le plan est reconnu (30 % des primitives,
+        // au moins 10 %), avec un avertissement pour les 70 % hors de l'emprise.
+        let mut l: Vec<[f64; 4]> = (0..3).map(|i| [1_042_000. + 10. * i as f64, 6_298_000., 1_042_005. + 10. * i as f64, 6_298_005.]).collect();
+        l.extend((0..7).map(|i| [i as f64, 0., i as f64 + 1., 1.]));
+        let z = zip_de_test(&[("plan.dwg", &dwg(&l))]);
+        let (n, _, rapport) = lire(&importer_zip_scn(&z, Repere::L93, None).unwrap());
+        assert_eq!(n, 10);
+        assert_eq!(rapport["systeme"], "Lambert 93");
+        assert!(
+            avertissements(&rapport).contains(&"Une partie du dessin (70 %) est hors de l'emprise du système reconnu.".to_string()),
+            "{rapport}"
+        );
+        // À la moitié ou plus dans l'emprise, rien n'est signalé.
+        let (_, _, rapport) = lire(&importer_zip_scn(&zip_nice(), Repere::L93, None).unwrap());
+        assert!(avertissements(&rapport).iter().all(|a| !a.starts_with("Une partie du dessin")), "{rapport}");
+        let mut l = NICE.to_vec();
+        l.extend([[0., 0., 1., 1.], [2., 2., 3., 3.]]);
+        let z = zip_de_test(&[("plan.dwg", &dwg(&l))]);
+        let (_, _, rapport) = lire(&importer_zip_scn(&z, Repere::L93, None).unwrap());
+        assert!(avertissements(&rapport).iter().all(|a| !a.starts_with("Une partie du dessin")), "{rapport}");
+    }
+
+    /// Un cercle seul, INSUNITS donné.
+    fn dwg_cercle(insunits: i16, centre: [f64; 2], rayon: f64) -> Vec<u8> {
+        let mut doc = CadDocument::new();
+        doc.header.insertion_units = insunits;
+        doc.add_entity(EntityType::Circle(Circle::from_coords(centre[0], centre[1], 0., rayon))).unwrap();
+        DwgWriter::write_to_vec(&doc).unwrap()
+    }
+
+    /// Genre (0 trait, 1 surface) et nombre de points de chaque primitive du SCN1, puis le rapport.
+    fn tailles(scn: &[u8]) -> (Vec<(u8, usize)>, serde_json::Value) {
+        let mut i = 4;
+        let nc = u32_a(scn, i) as usize;
+        i += 4;
+        for _ in 0..nc {
+            let n = u32_a(scn, i) as usize;
+            i += 4 + n + 4;
+        }
+        let np = u32_a(scn, i) as usize;
+        i += 4;
+        let mut v = Vec::new();
+        for _ in 0..np {
+            let genre = scn[i];
+            i += 1 + 4 + 4 + 4;
+            let n = u32_a(scn, i) as usize;
+            i += 4 + 16 * n;
+            v.push((genre, n));
+        }
+        let nr = u32_a(scn, i) as usize;
+        i += 4;
+        (v, serde_json::from_slice(&scn[i..i + nr]).unwrap())
+    }
+
+    const RECALCUL: &str = "Unités du dessin (INSUNITS) différentes des unités reconnues : tolérance de corde recalculée.";
+
+    #[test]
+    fn plan_en_metres_declare_en_mm_tolerance_recalculee() {
+        // INSUNITS 4 (mm) donnerait une corde de 1 m : un cercle de 5 m deviendrait un pentagone (6 points).
+        let z = zip_de_test(&[("plan.dwg", &dwg_cercle(4, [1_042_000., 6_298_000.], 5.))]);
+        let (p, rapport) = tailles(&importer_zip_scn(&z, Repere::L93, None).unwrap());
+        assert_eq!(rapport["systeme"], "Lambert 93");
+        assert_eq!(rapport["facteur"], serde_json::json!(1.0));
+        assert_eq!(p.len(), 1);
+        // Corde de 1 mm réel sur un rayon de 5 m : 158 segments.
+        assert!(p[0].1 > 6, "{p:?}");
+        assert_eq!(p[0].1, 159, "{p:?}");
+        assert!(avertissements(&rapport).contains(&RECALCUL.to_string()), "{rapport}");
+    }
+
+    #[test]
+    fn plan_en_mm_declare_en_metres_tolerance_bornee() {
+        // INSUNITS 6 (m) donnerait une corde de 1 µm réel : 4096 segments par cercle.
+        let z = zip_de_test(&[("plan.dwg", &dwg_cercle(6, [1_042_000_000., 6_298_000_000.], 5000.))]);
+        let (p, rapport) = tailles(&importer_zip_scn(&z, Repere::L93, None).unwrap());
+        assert_eq!(rapport["facteur"], serde_json::json!(0.001));
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].1, 159, "{p:?}");
+        assert!(avertissements(&rapport).contains(&RECALCUL.to_string()), "{rapport}");
+    }
+
+    #[test]
+    fn unites_concordantes_sans_recalcul() {
+        let z = zip_de_test(&[("plan.dwg", &dwg_cercle(6, [1_042_000., 6_298_000.], 5.))]);
+        let (p, rapport) = tailles(&importer_zip_scn(&z, Repere::L93, None).unwrap());
+        assert_eq!(rapport["facteur"], serde_json::json!(1.0));
+        assert_eq!(p[0].1, 159, "{p:?}");
+        assert!(!avertissements(&rapport).contains(&RECALCUL.to_string()), "{rapport}");
+    }
+
+    #[test]
+    fn moins_de_dix_pour_cent_refuse() {
+        let mut l = vec![NICE[0]];
+        l.extend((0..10).map(|i| [i as f64, 0., i as f64 + 1., 1.]));
+        let z = zip_de_test(&[("plan.dwg", &dwg(&l))]);
+        let v: serde_json::Value = serde_json::from_str(&importer_zip_scn(&z, Repere::L93, None).unwrap_err()).unwrap();
+        assert_eq!(v["code"], "non_georeference");
+    }
+
+    fn emprise(rapport: &serde_json::Value) -> [f64; 4] {
+        let v: Vec<f64> = rapport["emprise"].as_array().expect("emprise attendue").iter().map(|v| v.as_f64().unwrap()).collect();
+        v.try_into().unwrap()
+    }
+
+    #[test]
+    fn emprise_essentielle_sans_objet_egare() {
+        // L'objet égaré à l'origine est importé mais reste hors de l'emprise du rapport.
+        let mut l = NICE.to_vec();
+        l.push([0., 0., 0., 0.]);
+        let z = zip_de_test(&[("plan.dwg", &dwg(&l))]);
+        let (_, _, rapport) = lire(&importer_zip_scn(&z, Repere::L93, None).unwrap());
+        let e = emprise(&rapport);
+        assert!(e[0] > 1_000_000. && e[1] > 6_000_000., "l'origine est exclue : {e:?}");
+        assert!(e[0] <= 1_042_000. && e[1] <= 6_298_000. && e[2] >= 1_042_150. && e[3] >= 6_298_200., "le plan est couvert : {e:?}");
+    }
+
+    #[test]
+    fn emprise_dans_le_repere_demande() {
+        let (_, _, rapport) = lire(&importer_zip_scn(&zip_nice(), Repere::Mercator, None).unwrap());
+        let e = emprise(&rapport);
+        for (x, y) in [(1_042_000., 6_298_000.), (1_042_150., 6_298_200.), (1_042_000., 6_298_200.), (1_042_150., 6_298_000.)] {
+            let (mx, my) = carto_georef::l93_vers_mercator(x, y).unwrap();
+            assert!(mx >= e[0] - 1e-6 && mx <= e[2] + 1e-6 && my >= e[1] - 1e-6 && my <= e[3] + 1e-6, "{mx},{my} hors de {e:?}");
+        }
+    }
+
+    #[test]
+    fn non_georeference() {
+        let z = zip_de_test(&[("plan.dwg", &dwg(&[[0., 0., 10., 10.], [10., 10., 20., 5.]]))]);
+        let e = importer_zip_scn(&z, Repere::L93, None).unwrap_err();
+        let v: serde_json::Value = serde_json::from_str(&e).unwrap();
+        assert_eq!(v["code"], "non_georeference");
+        assert_eq!(
+            v["message"],
+            "Plan non géoréférencé : aucun système reconnu (Lambert 93, CC43, CC44, Lambert II étendu, Lambert III Sud ou carto)."
+        );
+    }
+
+    #[test]
+    fn plusieurs_maitres_json() {
+        let z = zip_de_test(&[("b.dwg", &dwg(&NICE)), ("a.dwg", &dwg(&NICE))]);
+        let e = importer_zip_scn(&z, Repere::L93, None).unwrap_err();
+        let v: serde_json::Value = serde_json::from_str(&e).unwrap();
+        assert_eq!(v["code"], "plusieurs_maitres");
+        assert_eq!(v["candidats"], serde_json::json!(["a.dwg", "b.dwg"]));
+    }
+
+    #[test]
+    fn aucun_dwg_et_maitre_inconnu() {
+        let z = zip_de_test(&[("x.txt", b"rien")]);
+        let v: serde_json::Value = serde_json::from_str(&importer_zip_scn(&z, Repere::L93, None).unwrap_err()).unwrap();
+        assert_eq!(v["code"], "aucun_dwg");
+        let v: serde_json::Value =
+            serde_json::from_str(&importer_zip_scn(&zip_nice(), Repere::L93, Some("zz.dwg")).unwrap_err()).unwrap();
+        assert_eq!(v["code"], "lecture");
+        assert_eq!(v["message"], "dessin maître inconnu : zz.dwg");
+    }
+
+    #[test]
+    fn zip_chiffre_refuse() {
+        use zip::unstable::write::FileOptionsExt;
+        let mut zw = ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default().with_deprecated_encryption(b"secret").unwrap();
+        zw.start_file("plan.dwg", options).unwrap();
+        zw.write_all(&dwg(&NICE)).unwrap();
+        let z = zw.finish().unwrap().into_inner();
+        let v: serde_json::Value = serde_json::from_str(&importer_zip_scn(&z, Repere::L93, None).unwrap_err()).unwrap();
+        assert_eq!(v["code"], "lecture");
+        assert_eq!(v["message"], "ZIP chiffré : enregistrez l'eTransmit sans mot de passe.");
+    }
+
+    /// Remplace la taille décompressée annoncée de la première entrée (en-tête local et répertoire central).
+    fn annoncer_taille(z: &mut [u8], taille: u32) {
+        assert_eq!(&z[..4], b"PK\x03\x04");
+        z[22..26].copy_from_slice(&taille.to_le_bytes());
+        let c = z.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
+        z[c + 24..c + 28].copy_from_slice(&taille.to_le_bytes());
+    }
+
+    #[test]
+    fn entree_de_plus_de_1_gio_refusee() {
+        let mut z = zip_de_test(&[("plan.dwg", &dwg(&NICE))]);
+        annoncer_taille(&mut z, (1 << 30) + 1);
+        let v: serde_json::Value = serde_json::from_str(&importer_zip_scn(&z, Repere::L93, None).unwrap_err()).unwrap();
+        assert_eq!(v["code"], "lecture");
+        assert_eq!(v["message"], "entrée du ZIP trop grande (plus de 1 Gio) : plan.dwg");
+    }
+
+    #[test]
+    fn lecture_bornee_a_la_taille_annoncee() {
+        // Une entrée qui se décompresse au-delà de sa taille annoncée est coupée à cette taille :
+        // le DWG tronqué devient illisible, sans lire plus que ce qui est annoncé.
+        let d = dwg(&NICE);
+        let mut z = zip_de_test(&[("plan.dwg", &d)]);
+        annoncer_taille(&mut z, 100);
+        let v: serde_json::Value = serde_json::from_str(&importer_zip_scn(&z, Repere::L93, None).unwrap_err()).unwrap();
+        assert_eq!(v["code"], "lecture");
+        let m = v["message"].as_str().unwrap();
+        assert!(m.starts_with("DWG illisible : plan.dwg : "), "{m}");
+    }
+
+    #[test]
+    fn repere_depuis_texte() {
+        assert!(matches!(Repere::depuis("l93"), Some(Repere::L93)));
+        assert!(matches!(Repere::depuis("mercator"), Some(Repere::Mercator)));
+        assert!(Repere::depuis("autre").is_none());
+    }
 }

@@ -1,5 +1,9 @@
 //! Crate georef de carto-projets : passage du Lambert 93 au Web Mercator.
 
+mod systemes;
+
+pub use systemes::{emprise_essentielle, reconnaitre, reconnaitre_primitives, Convertisseur, Reconnaissance, Systeme};
+
 use proj4rs::proj::Proj;
 use proj4rs::transform::transform;
 

@@ -55,6 +55,14 @@ pub fn emprise_depuis(min: [f64; 2], max: [f64; 2]) -> Option<[f64; 4]> {
     Some(valeurs)
 }
 
+/// Nom de type d'une entité tel que la mesure le compte (`?NOM` pour une entité inconnue).
+pub(crate) fn nom_de_type(e: &EntityType) -> String {
+    match e {
+        EntityType::Unknown(u) => format!("?{}", u.dxf_name),
+        autre => autre.as_entity().entity_type().to_string(),
+    }
+}
+
 /// Mesure un DWG.
 pub fn mesurer(octets: &[u8]) -> Result<Mesure, ErreurCad> {
     let sortie = lire(octets)?;
@@ -62,13 +70,10 @@ pub fn mesurer(octets: &[u8]) -> Result<Mesure, ErreurCad> {
     let mut par_type: BTreeMap<String, u64> = BTreeMap::new();
     let (mut total, mut inconnues) = (0u64, 0u64);
     for e in doc.model_space_entities() {
-        let nom = match e {
-            EntityType::Unknown(u) => {
-                inconnues += 1;
-                format!("?{}", u.dxf_name)
-            }
-            autre => autre.as_entity().entity_type().to_string(),
-        };
+        if matches!(e, EntityType::Unknown(_)) {
+            inconnues += 1;
+        }
+        let nom = nom_de_type(e);
         if matches!(nom.as_str(), "ATTRIB" | "SEQEND" | "VERTEX") {
             continue;
         }

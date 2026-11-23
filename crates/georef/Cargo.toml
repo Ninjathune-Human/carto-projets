@@ -4,5 +4,5 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-proj4rs = "0.3.1"
+proj4rs = { version = "0.3.1", features = ["tiff"] }
 thiserror = "2.0.21"

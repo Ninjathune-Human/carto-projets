@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import {
   echelleMini, lireLignes, genererSegments, versMercator, contourMercator,
-  anneauxContrainte, anneauxVoile, indexerSegments,
+  anneauxContrainte, anneauxVoile, indexerSegments, indexerPrimitives, entrelacerScene, FOULEE_SCENE,
 } from "../outils.js";
+import { preparerTampons } from "../../commun/rendu-scene.js";
 
 const FIXTURE = new URL("./deux_polylignes.lignes", import.meta.url);
 
@@ -135,4 +136,125 @@ test("index en grille : mêmes segments qu'une recherche exhaustive", () => {
   assert.deepEqual(index.etendue, { xmin: -500, ymin: -500, xmax: 1500, ymax: 1500 });
   assert.equal(index.x0[5000], -500);
   assert.equal(indexerSegments([]).chercher(0, 0, 1, 1).length, 0);
+});
+
+// Primitives de scène telles que les rend lireScene (points à plat x, y, x, y…).
+const trait = (...p) => ({ genre: "trait", couleur: [0, 0, 0, 255], calque: 0, epaisseurMm: 0, points: Float64Array.from(p) });
+const surface = (...p) => ({ genre: "surface", couleur: [0, 0, 0, 255], calque: 0, epaisseurMm: 0, points: Float64Array.from(p) });
+const scene = primitives => ({ calques: [{ nom: "0", couleur: [0, 0, 0] }], primitives, rapport: {} });
+
+test("index des primitives : cases distinctes, surface à cheval sur deux cases", () => {
+  // Emprise 0..1000 ; trois primitives donnent une grille de 2 × 2 cases de 500 m.
+  const index = indexerPrimitives(scene([
+    trait(0, 0, 10, 10),                      // en bas à gauche
+    trait(990, 990, 1000, 1000),              // en haut à droite, loin de la première
+    surface(400, 100, 600, 100, 500, 200),    // à cheval sur la limite x = 500
+  ]));
+  assert.equal(index.nbPrimitives, 3);
+  assert.equal(index.cote, 2);
+  assert.deepEqual(index.etendue, { xmin: 0, ymin: 0, xmax: 1000, ymax: 1000 });
+
+  const basGauche = index.caseDe(5, 5);
+  const hautDroite = index.caseDe(995, 995);
+  assert.notEqual(basGauche, hautDroite);
+  assert.ok(index.primitivesDeCase(basGauche).includes(0));
+  assert.ok(!index.primitivesDeCase(basGauche).includes(1));
+  assert.ok(index.primitivesDeCase(hautDroite).includes(1));
+  assert.ok(!index.primitivesDeCase(hautDroite).includes(0));
+
+  const gauche = index.caseDe(450, 150);
+  const droite = index.caseDe(550, 150);
+  assert.notEqual(gauche, droite);
+  assert.ok(index.primitivesDeCase(gauche).includes(2));
+  assert.ok(index.primitivesDeCase(droite).includes(2));
+
+  // Résultats sans doublon et dans l'ordre de la scène (la surface est trouvée avant le
+  // second trait en parcourant les cases, mais vient après lui dans la scène).
+  assert.deepEqual(Array.from(index.chercher(0, 0, 1000, 1000)), [0, 1, 2]);
+  assert.deepEqual(Array.from(index.chercher(550, 150, 560, 160)), [2]);
+  assert.deepEqual(Array.from(index.chercher(700, 700, 800, 800)), []);
+});
+
+test("index des primitives : mêmes primitives qu'une recherche exhaustive", () => {
+  const alea = lcg(11);
+  const prims = [];
+  for (let i = 0; i < 2000; i++) {
+    const x = alea() * 1000, y = alea() * 1000;
+    if (i % 3 === 0) prims.push(surface(x, y, x + alea() * 30, y, x, y + alea() * 30));
+    else prims.push(trait(x, y, x + (alea() - 0.5) * 40, y + (alea() - 0.5) * 40, x + alea() * 10, y));
+  }
+  prims.push(surface(-200, -200, 1200, -200, 500, 1200));    // couvre toute la grille
+  prims.push(trait(NaN, NaN, NaN, 3));                       // aucun point fini : jamais trouvée
+  prims.push(trait(NaN, 0, 2000, 2000, 2010, 2010));         // seuls les points finis comptent
+  prims.push(trait());                                       // vide
+  const index = indexerPrimitives(scene(prims));
+  assert.equal(index.nbPrimitives, prims.length);
+  assert.deepEqual(index.etendue, { xmin: -200, ymin: -200, xmax: 2010, ymax: 2010 });
+
+  const boite = p => {
+    let b = null;
+    for (let k = 0; k + 1 < p.points.length; k += 2) {
+      const x = p.points[k], y = p.points[k + 1];
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      b = b ? [Math.min(b[0], x), Math.min(b[1], y), Math.max(b[2], x), Math.max(b[3], y)] : [x, y, x, y];
+    }
+    return b;
+  };
+  const boites = prims.map(boite);
+  const exhaustif = (xmin, ymin, xmax, ymax) => boites
+    .map((b, i) => [b, i])
+    .filter(([b]) => b && b[0] <= xmax && b[2] >= xmin && b[1] <= ymax && b[3] >= ymin)
+    .map(([, i]) => i);
+
+  const rectangles = [
+    [0, 0, 1000, 1000], [-5000, -5000, 5000, 5000], [250, 250, 300, 400], [-300, -300, -250, -250],
+    [990, 990, 1001, 1001], [1999, 1999, 2001, 2001], [1500, 0, 1600, 100], [3000, 3000, 3100, 3100],
+  ];
+  for (const r of rectangles) {
+    const trouves = Array.from(index.chercher(...r));
+    assert.deepEqual(trouves, exhaustif(...r), String(r));
+  }
+  assert.equal(indexerPrimitives(scene([])).chercher(0, 0, 1, 1).length, 0);
+});
+
+test("tampons d'une tuile entrelacés dans l'ordre de la scène", () => {
+  const rouge = [255, 0, 0, 255], vert = [0, 255, 0, 128], bleu = [0, 0, 255, 255];
+  const t = preparerTampons(scene([
+    { ...surface(10, 10, 20, 10, 10, 20), couleur: rouge },
+    { ...trait(0, 0, 30, 0), couleur: vert, epaisseurMm: 0.5 },
+    { ...surface(10, 10, 20, 20, 10, 20, 0, 0, 1, 0, 0, 1), couleur: bleu },
+  ]), [10, 10]);
+  const { donnees, nbSommets } = entrelacerScene(t);
+  assert.equal(FOULEE_SCENE, 28);
+  assert.equal(nbSommets, 3 + 6 + 6);
+  assert.equal(donnees.byteLength, nbSommets * FOULEE_SCENE);
+  const f = new Float32Array(donnees);
+  const o = new Uint8Array(donnees);
+  const sommet = v => ({
+    position: [f[v * 7], f[v * 7 + 1]],
+    autre: [f[v * 7 + 2], f[v * 7 + 3]],
+    cote: f[v * 7 + 4],
+    epaisseur: f[v * 7 + 5],
+    couleur: Array.from(o.subarray(v * 28 + 24, v * 28 + 28)),
+  });
+  const sommets = Array.from({ length: nbSommets }, (_, v) => sommet(v));
+
+  // Surface rouge, puis le trait (deux triangles), puis la surface bleue : un seul appel de dessin
+  // les peint dans l'ordre de la scène.
+  assert.deepEqual(sommets.map(s => s.couleur), [
+    ...Array(3).fill(rouge), ...Array(6).fill(vert), ...Array(6).fill(bleu),
+  ]);
+  assert.deepEqual(sommets.slice(0, 3).map(s => s.position), [[0, 0], [10, 0], [0, 10]]);
+  for (const s of [...sommets.slice(0, 3), ...sommets.slice(9)]) {
+    assert.equal(s.cote, 0, "surface : pas d'élargissement");
+    assert.deepEqual(s.autre, s.position);
+  }
+  const segment = sommets.slice(3, 9);
+  for (const s of segment) {
+    assert.ok(Math.abs(s.cote) === 1, "trait : côté ±1");
+    assert.equal(s.epaisseur, 0.5);
+  }
+  // Les six sommets du segment : extrémités (-10, -10) et (20, -10), chacune vers l'autre.
+  assert.deepEqual(new Set(segment.map(s => `${s.position} > ${s.autre}`)), new Set(["-10,-10 > 20,-10", "20,-10 > -10,-10"]));
+  assert.deepEqual(entrelacerScene(preparerTampons(scene([]), [0, 0])).nbSommets, 0);
 });
